@@ -3,8 +3,7 @@
 // ===========================================================
 //
 // Popup menu for selecting camera views:
-//   - Runway - Approach view centered between 30L/30R  
-//   - Ambiguity Surface - View of the cone of ambiguity
+//   - Runway - Approach view centered between 30L/30R
 //   - FALCON LIMITS - Top-down matching FALCON display coverage
 //   - Overhead - Original overhead perspective
 //

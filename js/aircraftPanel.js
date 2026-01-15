@@ -6,8 +6,7 @@
 //   setupAircraftPanelUI(viewer, availableDrones, defaultDrones, loadDroneFn, unloadDroneFn, options)
 //
 // Options:
-//   { 
-//     showGhostPaths: true/false,           - whether to show ghost path checkboxes
+//   {
 //     showFullPath: (droneID) => {},        - callback to show full flight path polyline
 //     hideFullPath: (droneID) => {},        - callback to hide full flight path polyline
 //     showHistoricalApproaches: true/false, - whether to show historical approaches checkbox
@@ -42,7 +41,6 @@ let loadDrone = null;
 let unloadDrone = null;
 let showFullPath = null;   // Callback for showing full flight path
 let hideFullPath = null;   // Callback for hiding full flight path
-let showGhostPaths = false;  // Feature flag for ghost paths
 let showHistoricalApproaches = false;  // Feature flag for historical approaches
 
 // Historical approaches config
@@ -59,8 +57,6 @@ const state = {
     expanded: false,
     checkboxes: {},      // droneID → checkbox element (visibility)
     fullPathCbs: {},     // droneID → checkbox element (full path)
-    ghostV1Expanded: false,
-    ghostV2Expanded: false,
     historicalExpanded: false,
     historicalVisible: false,
     historicalRunwayCheckboxes: {},  // runway → { checkbox, files }
@@ -232,157 +228,6 @@ function createSeparator() {
     sep.style.margin = "8px 0";
     return sep;
 }
-
-
-
-// ===========================================================
-//                GHOST PATHS SECTION
-// ===========================================================
-
-/**
- * Creates a collapsible section for ghost paths with a master checkbox
- * that controls all ghost paths in the group, plus an analysis link.
- */
-function createGhostSection(title, ghostIDs, colorHex, expandKey, analysisLink) {
-    const container = document.createElement("div");
-    container.style.marginBottom = "4px";
-
-    // Header row with master checkboxes (Show + All)
-    const headerRow = document.createElement("div");
-    headerRow.style.display = "flex";
-    headerRow.style.alignItems = "center";
-
-    // Master visibility checkbox
-    const masterCb = document.createElement("input");
-    masterCb.type = "checkbox";
-    masterCb.checked = false;
-    masterCb.title = "Show/hide all ghost paths in this group";
-
-    // Master full path checkbox
-    const masterFullPathCb = document.createElement("input");
-    masterFullPathCb.type = "checkbox";
-    masterFullPathCb.checked = false;
-    masterFullPathCb.title = "Show/hide all full paths for this group";
-    masterFullPathCb.style.marginLeft = "8px";
-
-    // Label
-    const labelSpan = document.createElement("label");
-    labelSpan.innerText = title;
-    labelSpan.style.marginLeft = "4px";
-    labelSpan.style.fontSize = "12px";
-    labelSpan.style.color = colorHex;
-    labelSpan.style.flex = "1";
-
-    // Expand button
-    const expandBtn = document.createElement("button");
-    expandBtn.innerText = "+";
-    expandBtn.style.marginLeft = "4px";
-    expandBtn.style.padding = "0 4px";
-    expandBtn.style.fontSize = "10px";
-    expandBtn.style.cursor = "pointer";
-
-    // Analysis link (small icon/button)
-    const analysisBtn = document.createElement("button");
-    analysisBtn.innerText = "📊";  // Chart emoji
-    analysisBtn.title = "Open analysis plot";
-    analysisBtn.style.marginLeft = "4px";
-    analysisBtn.style.padding = "0 4px";
-    analysisBtn.style.fontSize = "12px";
-    analysisBtn.style.cursor = "pointer";
-    analysisBtn.style.background = "transparent";
-    analysisBtn.style.border = "1px solid #555";
-    analysisBtn.style.color = "white";
-    analysisBtn.style.borderRadius = "3px";
-    
-    analysisBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        window.open(analysisLink, '_blank');
-    });
-
-    headerRow.appendChild(masterCb);
-    headerRow.appendChild(masterFullPathCb);
-    headerRow.appendChild(labelSpan);
-    headerRow.appendChild(analysisBtn);
-    headerRow.appendChild(expandBtn);
-    container.appendChild(headerRow);
-
-    // Sub-list container (initially hidden)
-    const subList = document.createElement("div");
-    subList.style.display = "none";
-    subList.style.marginLeft = "18px";
-    subList.style.marginTop = "4px";
-
-    // Create individual ghost checkboxes
-    ghostIDs.forEach(ghostID => {
-        const row = createAircraftRow(ghostID);
-        if (row) subList.appendChild(row);
-    });
-
-    container.appendChild(subList);
-
-    // Update master checkboxes based on individual states
-    function updateMasterCheckboxes() {
-        const visChecked = ghostIDs.filter(id => state.checkboxes[id]?.checked).length;
-        const visTotal = ghostIDs.length;
-        masterCb.checked = visChecked === visTotal;
-        masterCb.indeterminate = visChecked > 0 && visChecked < visTotal;
-
-        const fullChecked = ghostIDs.filter(id => state.fullPathCbs[id]?.checked).length;
-        masterFullPathCb.checked = fullChecked === visTotal;
-        masterFullPathCb.indeterminate = fullChecked > 0 && fullChecked < visTotal;
-    }
-
-    // Master visibility checkbox toggles all
-    masterCb.addEventListener("change", () => {
-        const newState = masterCb.checked;
-        ghostIDs.forEach(ghostID => {
-            if (state.checkboxes[ghostID]) {
-                state.checkboxes[ghostID].checked = newState;
-                if (newState) {
-                    loadDrone(ghostID);
-                } else {
-                    unloadDrone(ghostID);
-                    // Also uncheck full path
-                    if (state.fullPathCbs[ghostID]) {
-                        state.fullPathCbs[ghostID].checked = false;
-                        if (hideFullPath) hideFullPath(ghostID);
-                    }
-                }
-            }
-        });
-    });
-
-    // Master full path checkbox toggles all full paths
-    masterFullPathCb.addEventListener("change", () => {
-        const newState = masterFullPathCb.checked;
-        ghostIDs.forEach(ghostID => {
-            if (state.fullPathCbs[ghostID]) {
-                state.fullPathCbs[ghostID].checked = newState;
-                if (newState) {
-                    if (showFullPath) showFullPath(ghostID);
-                } else {
-                    if (hideFullPath) hideFullPath(ghostID);
-                }
-            }
-        });
-    });
-
-    // Expand button toggles sub-list
-    expandBtn.addEventListener("click", () => {
-        state[expandKey] = !state[expandKey];
-        subList.style.display = state[expandKey] ? "block" : "none";
-        expandBtn.innerText = state[expandKey] ? "−" : "+";
-        updateMasterCheckboxes();
-    });
-
-    // Store master checkbox references
-    state.checkboxes[`${expandKey}_master`] = masterCb;
-    state.fullPathCbs[`${expandKey}_master`] = masterFullPathCb;
-
-    return container;
-}
-
-
 
 // ===========================================================
 //              HISTORICAL APPROACHES SECTION
@@ -1133,47 +978,6 @@ function buildAircraftList() {
                 unloadDrone(droneID);
             }
         });
-        // Also unload ghosts if they're enabled
-        if (showGhostPaths) {
-            // Unload V1
-            GHOST_V1_IDS.forEach(id => {
-                if (state.checkboxes[id]) {
-                    state.checkboxes[id].checked = false;
-                }
-                if (state.fullPathCbs[id]) {
-                    state.fullPathCbs[id].checked = false;
-                    if (hideFullPath) hideFullPath(id);
-                }
-                unloadDrone(id);
-            });
-            if (state.checkboxes["ghostV1Expanded_master"]) {
-                state.checkboxes["ghostV1Expanded_master"].checked = false;
-                state.checkboxes["ghostV1Expanded_master"].indeterminate = false;
-            }
-            if (state.fullPathCbs["ghostV1Expanded_master"]) {
-                state.fullPathCbs["ghostV1Expanded_master"].checked = false;
-                state.fullPathCbs["ghostV1Expanded_master"].indeterminate = false;
-            }
-            // Unload V2
-            GHOST_V2_IDS.forEach(id => {
-                if (state.checkboxes[id]) {
-                    state.checkboxes[id].checked = false;
-                }
-                if (state.fullPathCbs[id]) {
-                    state.fullPathCbs[id].checked = false;
-                    if (hideFullPath) hideFullPath(id);
-                }
-                unloadDrone(id);
-            });
-            if (state.checkboxes["ghostV2Expanded_master"]) {
-                state.checkboxes["ghostV2Expanded_master"].checked = false;
-                state.checkboxes["ghostV2Expanded_master"].indeterminate = false;
-            }
-            if (state.fullPathCbs["ghostV2Expanded_master"]) {
-                state.fullPathCbs["ghostV2Expanded_master"].checked = false;
-                state.fullPathCbs["ghostV2Expanded_master"].indeterminate = false;
-            }
-        }
         // Also hide historical approaches
         if (showHistoricalApproaches && state.checkboxes["historicalApproaches"]) {
             state.checkboxes["historicalApproaches"].checked = false;
@@ -1228,41 +1032,14 @@ function buildAircraftList() {
     });
 
     // Historical approaches (only if feature enabled and files provided)
-    // Placed right after main aircraft, before ghosts
     if (showHistoricalApproaches && historicalApproachFiles.length > 0) {
         listContainer.appendChild(createSeparator());
-        
+
         // Historical approaches section with runway sub-checkboxes and measurement
         const historicalSection = createHistoricalApproachesSection();
         if (historicalSection) {
             listContainer.appendChild(historicalSection);
         }
-    }
-
-    // Separator before ghost paths
-    listContainer.appendChild(createSeparator());
-
-    // Ghost paths (only if feature flag is enabled)
-    if (showGhostPaths) {
-        // V1 Ghost Paths - Aqua
-        const v1Section = createGhostSection(
-            "Ghost Paths (v1)",
-            GHOST_V1_IDS,
-            "#7FFFD4",  // Aqua
-            "ghostV1Expanded",
-            "ghost_v1_analysis_plot.html"  // Analysis link for V1
-        );
-        listContainer.appendChild(v1Section);
-        
-        // V2 Ghost Paths - Orange
-        const v2Section = createGhostSection(
-            "Ghost Paths (v2)",
-            GHOST_V2_IDS,
-            "#FF8C00",  // Dark orange
-            "ghostV2Expanded",
-            "ghost_v2_analysis_plot.html"  // Analysis link for V2
-        );
-        listContainer.appendChild(v2Section);
     }
 
     // Separator
@@ -1294,7 +1071,6 @@ function buildAircraftList() {
 
         viewableCb.addEventListener("change", () => {
             setAllModelsViewableAtDistance(viewableCb.checked);
-            setAllGhostsViewableAtDistance(viewableCb.checked);
         });
 
         const viewableLabel = document.createElement("label");
@@ -1399,70 +1175,6 @@ function buildAircraftList() {
         models3DSection.appendChild(n160ra3DRow);
 
         listContainer.appendChild(models3DSection);
-
-        // ========== Ghost 3D Models Section ==========
-        const ghost3DSection = document.createElement("div");
-        ghost3DSection.style.marginTop = "8px";
-        ghost3DSection.style.paddingTop = "6px";
-        ghost3DSection.style.borderTop = "1px solid #444";
-
-        const ghost3DLabel = document.createElement("div");
-        ghost3DLabel.innerText = "Ghost Aircraft (3D)";
-        ghost3DLabel.style.fontSize = "10px";
-        ghost3DLabel.style.color = "#888";
-        ghost3DLabel.style.marginBottom = "4px";
-        ghost3DSection.appendChild(ghost3DLabel);
-
-        // Ghost 3D configurations
-        const ghost3DConfigs = [
-            { id: 'Ghost_080x', label: 'Ghost 0.80x' },
-            { id: 'Ghost_090x', label: 'Ghost 0.90x' },
-            { id: 'Ghost_110x', label: 'Ghost 1.10x' },
-            { id: 'Ghost_120x', label: 'Ghost 1.20x' }
-        ];
-
-        ghost3DConfigs.forEach(({ id, label }) => {
-            const row = document.createElement("div");
-            row.style.display = "flex";
-            row.style.alignItems = "center";
-            row.style.marginBottom = "2px";
-
-            const cb = document.createElement("input");
-            cb.type = "checkbox";
-            cb.checked = false;
-            cb.title = `Show Ghost at ${label.split(' ')[1]} range`;
-
-            cb.addEventListener("change", async () => {
-                await setGhostVisible(id, cb.checked);
-            });
-
-            const lbl = document.createElement("label");
-            lbl.innerText = label;
-            lbl.style.marginLeft = "4px";
-            lbl.style.fontSize = "12px";
-            lbl.style.color = "#ccc";
-            lbl.style.flex = "1";
-
-            // Outline checkbox for ghost
-            const outlineCb = document.createElement("input");
-            outlineCb.type = "checkbox";
-            outlineCb.checked = false;
-            outlineCb.title = `Toggle lime outline on ${label} model`;
-            outlineCb.style.marginLeft = "8px";
-            outlineCb.style.outline = "2px solid #00FF00";
-            outlineCb.style.outlineOffset = "1px";
-
-            outlineCb.addEventListener("change", () => {
-                setGhostOutline(id, outlineCb.checked);
-            });
-
-            row.appendChild(cb);
-            row.appendChild(lbl);
-            row.appendChild(outlineCb);
-            ghost3DSection.appendChild(row);
-        });
-
-        listContainer.appendChild(ghost3DSection);
     }
 }
 
@@ -1485,8 +1197,7 @@ export function setupAircraftPanelUI(
     unloadDrone = unloadDroneFn;
     showFullPath = options.showFullPath || null;    // Callback: showFullPath(droneID)
     hideFullPath = options.hideFullPath || null;    // Callback: hideFullPath(droneID)
-    showGhostPaths = options.showGhostPaths || false;  // Feature flag for ghost paths
-    
+
     // Historical approaches config
     showHistoricalApproaches = options.showHistoricalApproaches || false;  // Feature flag
     historicalApproachFiles = options.historicalApproachFiles || [];

@@ -1,0 +1,43 @@
+# Node modules
+node_modules/
+package-lock.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.backup.csv
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+*.log
+
+# Temporary files
+*.tmp
+.cache/
+
+# Backup files
+*.backup_alt.csv
+*_keep.js
+js/data/historical/set aside/
+
+# Claude Code local settings
+.claude/

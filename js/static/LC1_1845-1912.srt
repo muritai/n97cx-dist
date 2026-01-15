@@ -1,0 +1,321 @@
+﻿1
+00:00:14,114 --> 00:00:16,800
+[LC] cessna zero romeo alpha runway three zero right cleared for the option
+
+2
+00:00:17,430 --> 00:00:19,485
+[N160RA] three zero right cleared for the option zero romeo alpha
+
+3
+00:00:24,970 --> 00:00:27,600
+[N160RA] i believe you gave us the clearance in the upwind but thank you for confirming
+
+4
+00:00:27,600 --> 00:00:31,360
+[LC] I did.  I was just verifying. yep
+
+5
+00:00:31,359 --> 00:00:33,359
+[N160RA] Better safe than sorry, they say
+
+6
+00:00:44,359 --> 00:00:50,359
+[LC] one through five okay for local one local two local assist three zero left three zero right two five
+
+7
+00:00:50,359 --> 00:00:56,359
+[LC] traffic is metro two on taxiway papa doing pattern work.
+
+8
+00:00:56,560 --> 00:01:00,914
+[N786TX] las vegas tower cirrus seven eight six tango xray holding short three zero left kilo ready for departure.
+
+9
+00:01:00,910 --> 00:01:02,560
+[LC] that's their first call.
+
+10
+00:01:02,834 --> 00:01:08,171
+[LC] cirrus seven eight six tango xray north las vegas tower left turn approved runway three zero left cleared for takeoff.
+
+11
+00:01:08,800 --> 00:01:11,737
+[N786TX] three zero left kilo cleared for takeoff six tango xray
+
+12
+00:01:11,740 --> 00:01:17,840
+[LC] okay, so they're going to forty inbound is airsmart five five not on frequency or scope yet
+
+13
+00:01:17,840 --> 00:01:21,560
+[LC] proposed inbound is meridian seven charlie xray
+
+14
+00:01:21,560 --> 00:01:25,942
+[LC] I don't think I said it but cessna zero romeo alpha in the upwind
+
+15
+00:01:25,940 --> 00:01:30,034
+[LC] not cleared for a three zero right pattern work light sport in the run-up area
+
+16
+00:01:30,411 --> 00:01:32,640
+[METRO2] (unintelligible) metro two (unintelligible) taxiway papa would like to air taxi over to the uh metro pad
+
+17
+00:01:41,051 --> 00:01:43,760
+[LC] metro two uh proceed uh direct to the metro pad
+
+18
+00:01:44,091 --> 00:01:45,005
+[METRO2] metro two
+
+19
+00:02:56,971 --> 00:02:59,211
+[LC] six tango xray contact las vegas departure
+
+20
+00:02:59,560 --> 00:03:02,548
+[N768TX] over to las vegas departure six tango xray
+
+21
+00:03:50,182 --> 00:03:53,691
+[LC] cessna zero romeo alpha runway three zero right cleared for the option
+
+22
+00:03:54,050 --> 00:03:56,902
+[N160RA] three zero right cleared for the option zero romeo alpha
+
+23
+00:04:01,100 --> 00:04:05,771
+[XSM55] north las vegas tower airsmart five five visual runway three zero left
+
+24
+00:04:06,560 --> 00:04:11,337
+[LC] airsmart five five north las vegas tower continue left traffic runway three zero left
+
+25
+00:04:11,560 --> 00:04:16,560
+[XSM55] continue left traffic for three zero left airsmart five five
+
+26
+00:04:17,280 --> 00:04:23,263
+[XSM55] and tower airsmart five five would you prefer us to overfly the field at or above thirty five or pass the departure end
+
+27
+00:04:32,560 --> 00:04:35,533
+[LC] airsmart five five over the field at three thousand five hundred
+
+28
+00:04:36,766 --> 00:04:37,800
+[XSM55] airsmart five five
+
+29
+00:06:37,550 --> 00:06:40,075
+[LC] airsmart five five runway three zero left clear to land
+
+30
+00:06:40,300 --> 00:06:42,725
+[XSM55] cleared to land runway three zero left airsmart five five
+
+31
+00:06:48,100 --> 00:06:51,975
+[N90MX] tower nine zero mike xray holding short of three zero left at kilo
+
+32
+00:06:52,500 --> 00:06:57,000
+[LC] light sport nine zero mike xray north las vegas tower no delay runway three zero left cleared for takeoff wind calm
+
+33
+00:06:57,004 --> 00:06:59,650
+[N90MX] no delay three zero left nine zero mike xray
+
+34
+00:07:26,977 --> 00:07:30,488
+[LC] cessna zero romeo alpha runway three zero right cleared for the option
+
+35
+00:07:30,490 --> 00:07:33,155
+[N160RA] three zero right cleared for the option zero romeo alpha
+
+36
+00:09:12,555 --> 00:09:14,866
+[LC] airsmart five five taxi charlie to parking
+
+37
+00:09:15,200 --> 00:09:17,111
+[XSM55] taxi charlie parking airsmart five five
+
+38
+00:09:18,044 --> 00:09:21,177
+[LC] nellis north las vegas air smart five five on the ground ez
+
+39
+00:09:22,710 --> 00:09:27,377
+[NATCF] uh two five miles to fly november nine seven charlie xray visual approach full stop
+
+40
+00:09:27,380 --> 00:09:28,690
+[LC] runway three zero left
+
+41
+00:09:28,688 --> 00:09:29,666
+[NATCF] g g
+
+42
+00:10:51,000 --> 00:10:54,133
+[N160RA] tower zero romeo alpha would like to request a short approach on this one please
+
+43
+00:10:58,466 --> 00:11:02,040
+[LC] cessna zero romeo alpha short approach approved three zero right cleared for the option
+
+44
+00:11:02,444 --> 00:11:05,222
+[N160RA] short approach approved three zero right cleared for the option zero romeo alpha
+
+45
+00:13:43,330 --> 00:13:56,088
+[N97CX] north las vegas tower november nine seven charlie xray is descending out of seven thousand six hundred for landing on three zero left and uh nellis said to cross midfield
+
+46
+00:13:56,400 --> 00:13:57,733
+[UNKNOWN] (unintelligible) Carol
+
+47
+00:13:57,933 --> 00:13:58,560
+[N97CX] hi
+
+48
+00:13:58,955 --> 00:14:00,866
+[UNKNOWN] where you go where you coming from
+
+49
+00:14:02,555 --> 00:14:06,333
+[LC] nine seven charlie xray north Las Vegas tower continue runway three zero left
+
+50
+00:14:06,330 --> 00:14:11,533
+[N97CX] okay continue for runway three zero left nine seven charlie x-ray we'll cross midfield
+
+51
+00:14:14,111 --> 00:14:15,844
+[LC] wind three one zero seven
+
+52
+00:14:16,466 --> 00:14:18,933
+[N97CX] thank you for the winds three one zero seven got it
+
+53
+00:14:20,600 --> 00:14:28,177
+[N738CY] north las vegas tower cessna three eight charlie yankee over red rock uh casino with information november looking for full stop terminate
+
+54
+00:14:29,470 --> 00:14:34,777
+[LC] cessna seven three eight charlie yankee north las vegas tower enter midfield left downwind runway three zero left
+
+55
+00:14:35,400 --> 00:14:38,560
+[N738CY] midfield left downwind runway three zero left eight charlie yankee
+
+56
+00:14:43,311 --> 00:14:47,560
+[N466MD] north las vegas tower extra four six six mike delta Ione mountain november full stop
+
+57
+00:14:54,911 --> 00:15:00,200
+[LC] extra four six six mike delta north las vegas tower make left traffic runway three zero left
+
+58
+00:15:00,560 --> 00:15:03,111
+[N466MD] left traffic runway three zero left six mike delta
+
+59
+00:15:04,288 --> 00:15:06,933
+[N160RA] tower zero romeo alpha would like to request another short approach please
+
+60
+00:15:07,288 --> 00:15:10,488
+[LC] cessna zero romeo alpha short approach approved runway three zero right cleared for the option
+
+61
+00:15:10,490 --> 00:15:13,622
+[N160RA] short approach approved three zero right cleared for the option zero romeo alpha
+
+62
+00:15:27,911 --> 00:15:32,088
+[LC] cessna eight charlie yankee amend instructions turn left towards lone mountain i'll call you back in
+
+63
+00:15:32,090 --> 00:15:35,088
+[N738CY] left turn lone mountain eight charlie yankee
+
+64
+00:16:18,955 --> 00:16:24,488
+[LC] extra six mike delta reduce speed you'll be following a meridian overflying the field at midfield now report in sight
+
+65
+00:16:24,933 --> 00:16:27,377
+[N466MD] we'Il reduce speed six mike delta looking for em
+
+66
+00:16:27,644 --> 00:16:32,733
+[LC] cessna eight charlie yankee you can begin a right turn back in to the enter a right downwind runway three zero right
+
+67
+00:16:33,933 --> 00:16:36,755
+[N738CY] entering a right downwind three zero right eight charlie yankee
+
+68
+00:16:37,333 --> 00:16:40,022
+[LC] november seven charlie xray runway three zero left cleared to land
+
+69
+00:16:41,560 --> 00:16:44,560
+[N97CX] three zero left cleared to land nine seven charlie xray
+
+70
+00:16:47,822 --> 00:16:49,933
+[N466MD] traffic in sight six mike delta
+
+71
+00:16:50,177 --> 00:16:54,088
+[LC] extra six mike delta number two runway three zero left cleared to land
+
+72
+00:16:54,355 --> 00:16:56,555
+[N466MD] number two runway three zero left cleared to land six mike delta
+
+73
+00:16:57,888 --> 00:17:02,933
+[LC] seven charlie xray i think i said it right runway three zero Ieft seven charlie xray runway three zero left
+
+74
+00:17:02,930 --> 00:17:07,022
+[N97CX] yeah affirmative three zero left that's what i heard nine seven charlie xray
+
+75
+00:17:07,020 --> 00:17:07,600
+[UNKNOWN] (unintelligible)
+
+76
+00:18:17,560 --> 00:18:19,711
+[N455MD] do you want six mike delta to three sixty
+
+77
+00:18:19,977 --> 00:18:23,488
+[LC] november six mike delta you can come on to land you can land you can still land if you're fine
+
+78
+00:18:23,688 --> 00:18:24,755
+[N456MD] six mike delta
+
+79
+00:18:26,288 --> 00:18:29,955
+[LC] elght charlie yankee you're number two to follow that traffic runway three zero left cleared to land
+
+80
+00:18:30,688 --> 00:18:33,244
+[N73BCY] two three zero cleared to land eight charlie yankee  
+
+

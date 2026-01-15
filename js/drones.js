@@ -5,9 +5,6 @@
 // ===========================================================
 // Set to false to disable features before deployment
 const FEATURES = {
-    ghostPaths: false,
-    azElRays: false,
-    ambiguitySurface: false,
     followView: true,
     runwayCenterlines: true,
     reportingPoints: true,
@@ -100,15 +97,6 @@ setupHistoricalMeasurement(viewer, ATCTLat, ATCTLon, ATCTHeight);
 
 import { setupMeasurements } from "./measurements.js";
 setupMeasurements(viewer, ATCTLat, ATCTLon);
-
-if (FEATURES.azElRays) {
-    import("./azElRays.js").then(m => {
-        m.setupAzElRays(viewer);
-        if (FEATURES.ambiguitySurface) {
-            m.setupAmbiguitySurface(viewer);
-        }
-    });
-}
 
 import { setupAircraftPanelUI } from "./aircraftPanel.js";
 import { setupATCTView } from "./atctView.js";
@@ -678,18 +666,6 @@ const FIXED_ASSIGNMENTS = {
     "N738CY": Cesium.Color.GREEN,
     "N466MD": Cesium.Color.MAGENTA,
     "Olsen": Cesium.Color.YELLOW,
-    // Ghost paths - all use same semi-transparent orange/amber
-    "Ghost_080x": Cesium.Color.AQUA.withAlpha(0.7),
-    "Ghost_090x": Cesium.Color.AQUA.withAlpha(0.7),
-    "Ghost_110x": Cesium.Color.AQUA.withAlpha(0.7),
-    "Ghost_120x": Cesium.Color.AQUA.withAlpha(0.7),
-    "Ghost_130x": Cesium.Color.AQUA.withAlpha(0.7),
-    "Ghost_140x": Cesium.Color.AQUA.withAlpha(0.7),
-    "Ghost_150x": Cesium.Color.AQUA.withAlpha(0.7),
-    "Ghost_080xv2": Cesium.Color.DARKORANGE.withAlpha(0.7),
-    "Ghost_090xv2": Cesium.Color.DARKORANGE.withAlpha(0.7),
-    "Ghost_110xv2": Cesium.Color.DARKORANGE.withAlpha(0.7),
-    "Ghost_120xv2": Cesium.Color.DARKORANGE.withAlpha(0.7),
 };
 
 
@@ -815,8 +791,8 @@ const loadedDrones = new Set();
 
 // Fetch List of Drone Files (Simulated for now)
 const availableFiles = [
-    "N97CX_xyz.csv", 
-    "N160RA_xyz.csv", 
+    "N97CX_xyz.csv",
+    "N160RA_xyz.csv",
     "N90MX_xyz.csv",
     "N786TX_xyz.csv",
     "XSM55_xyz.csv",
@@ -825,29 +801,10 @@ const availableFiles = [
     "Sim_xyz.csv",
     "Olsen_xyz.csv",
     "N2406P_xyz.csv",
-    // Ghost paths (same azimuth/elevation from ATCT, different ranges)
-    "Ghost_080x_xyz.csv",
-    "Ghost_090x_xyz.csv",
-    "Ghost_110x_xyz.csv",
-    "Ghost_120x_xyz.csv",
-    "Ghost_130x_xyz.csv",
-    "Ghost_140x_xyz.csv",
-    "Ghost_150x_xyz.csv",
-    "Ghost_080xv2_xyz.csv",
-    "Ghost_090xv2_xyz.csv",
-    "Ghost_110xv2_xyz.csv",
-    "Ghost_120xv2_xyz.csv",
-   
 ];
 
 
-const availableDrones = availableFiles.map(f => {
-    // Handle Ghost files specially (they have format Ghost_NNNx_xyz.csv)
-    if (f.startsWith("Ghost_")) {
-        return f.replace("_xyz.csv", "");  // "Ghost_150x_xyz.csv" → "Ghost_150x"
-    }
-    return f.split("_")[0];  // "N97CX_xyz.csv" → "N97CX"
-});
+const availableDrones = availableFiles.map(f => f.split("_")[0]);
 
 import { parseCSV } from './csvParser.js';
 import { setupLabelMode, buildLabelText, loadGSForDrone } from './labelMode.js';
@@ -974,9 +931,7 @@ setupAircraftPanelUI(
         loadedDrones.delete(droneID);
     },
     // Options
-    { 
-        showGhostPaths: FEATURES.ghostPaths,
-        
+    {
         showFullPath: (droneID) => {
             const drone = activeDrones[droneID];
             if (!drone || !drone._fullPathPositions) {

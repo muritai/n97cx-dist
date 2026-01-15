@@ -30,10 +30,9 @@ let labelModeButton = null;
 
 /**
  * Load groundspeed data for a specific drone
- * @param {string} droneID - The drone identifier (e.g., "N97CX", "Ghost_080x")
+ * @param {string} droneID - The drone identifier (e.g., "N97CX")
  */
 async function loadGroundspeedData(droneID) {
-    // Construct filename - handle both regular and ghost formats
     const filename = `js/data/${droneID}_gs.csv`;
     
     try {

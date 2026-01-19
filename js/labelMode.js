@@ -31,9 +31,10 @@ let labelModeButton = null;
 /**
  * Load groundspeed data for a specific drone
  * @param {string} droneID - The drone identifier (e.g., "N97CX")
+ * @param {string} [customFilename] - Optional custom filename override
  */
-async function loadGroundspeedData(droneID) {
-    const filename = `js/data/${droneID}_gs.csv`;
+async function loadGroundspeedData(droneID, customFilename = null) {
+    const filename = customFilename || `js/data/${droneID}_gs.csv`;
     
     try {
         const response = await fetch(filename);
@@ -166,11 +167,20 @@ export async function setupLabelMode(viewer, droneIDs = []) {
 /**
  * Load GS data for a single drone (call when drone is loaded dynamically)
  * @param {string} droneID - The drone identifier
+ * @param {string} [customFilename] - Optional custom filename override
  */
-export async function loadGSForDrone(droneID) {
-    if (!groundspeedData[droneID]) {
-        await loadGroundspeedData(droneID);
+export async function loadGSForDrone(droneID, customFilename = null) {
+    if (!groundspeedData[droneID] || customFilename) {
+        await loadGroundspeedData(droneID, customFilename);
     }
+}
+
+/**
+ * Clear cached GS data for a drone (call before reloading)
+ * @param {string} droneID - The drone identifier
+ */
+export function clearGSForDrone(droneID) {
+    delete groundspeedData[droneID];
 }
 
 /**

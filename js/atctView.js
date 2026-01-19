@@ -58,8 +58,6 @@ import { AIRCRAFT_ORDER } from "./aircraftPanel.js";
 
 import { disableFollowView } from "./followView.js";
 
-import { get3DModelPosition } from "./drones.js";
-
 
 // ================== PUBLIC API (MODIFIED) ==================
 
@@ -498,41 +496,10 @@ function atctViewTick(clock) {
     if (atctTrackEnabled && atctTrackingTarget) {
         let targetCartesian = null;
 
-        // For primary aircraft, use stored position property (survives entity removal)
-        const primaryAircraft = ['N97CX', 'N160RA'];
-        let isPrimaryAircraft = false;
-
-        for (const baseId of primaryAircraft) {
-            if (atctTrackingTarget === baseId || atctTrackingTarget === `${baseId}-3d-model`) {
-                isPrimaryAircraft = true;
-
-                // First try the stored 3D model position (most reliable)
-                const storedPosition = get3DModelPosition(baseId);
-                if (storedPosition) {
-                    targetCartesian = storedPosition.getValue(clock.currentTime);
-                }
-
-                // Fallback to entity lookup
-                if (!targetCartesian) {
-                    const idsToTry = [`${baseId}-3d-model`, baseId];
-                    for (const entityId of idsToTry) {
-                        const ent = viewerRef.entities.getById(entityId);
-                        if (ent && ent.position) {
-                            targetCartesian = ent.position.getValue(clock.currentTime);
-                            if (targetCartesian) break;
-                        }
-                    }
-                }
-                break;
-            }
-        }
-
-        // For non-primary aircraft, use direct lookup
-        if (!isPrimaryAircraft) {
-            const drone = viewerRef.entities.getById(atctTrackingTarget);
-            if (drone && drone.position) {
-                targetCartesian = drone.position.getValue(clock.currentTime);
-            }
+        // Look up the target entity directly
+        const drone = viewerRef.entities.getById(atctTrackingTarget);
+        if (drone && drone.position) {
+            targetCartesian = drone.position.getValue(clock.currentTime);
         }
 
         if (targetCartesian) {
@@ -676,33 +643,8 @@ function refreshTrackingList(trackSelect) {
         trackSelect.remove(1);
     }
 
-    // Primary aircraft (N97CX first, then N160RA)
-    const primaryAircraft = ['N97CX', 'N160RA'];
-
-    // Add N97CX and N160RA first at the top
-    primaryAircraft.forEach(baseId => {
-        // Check if either base or 3D model entity exists
-        const modelId = `${baseId}-3d-model`;
-        const modelEnt = viewerRef.entities.getById(modelId);
-        const baseEnt = viewerRef.entities.getById(baseId);
-
-        // Need at least one entity to exist
-        if (!modelEnt && !baseEnt) return;
-
-        // Always track using whichever entity exists (prefer 3D model for position)
-        const trackId = modelEnt ? modelId : baseId;
-
-        const opt = document.createElement("option");
-        opt.value = trackId;
-        opt.textContent = baseId;
-        trackSelect.appendChild(opt);
-    });
-
-    // Add remaining aircraft following the AIRCRAFT_ORDER list
+    // Add aircraft following the AIRCRAFT_ORDER list
     AIRCRAFT_ORDER.forEach(id => {
-        // Skip primary aircraft - already added above
-        if (primaryAircraft.includes(id)) return;
-
         const ent = viewerRef.entities.getById(id);
         if (!ent) return;
 
@@ -711,5 +653,4 @@ function refreshTrackingList(trackSelect) {
         opt.textContent = id;
         trackSelect.appendChild(opt);
     });
-
 }

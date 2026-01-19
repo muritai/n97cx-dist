@@ -27,12 +27,8 @@
 //
 // ===========================================================
 
-// Import measurement functions and 3D model control from drones.js
-import { setMeasurementEnabled, setCurrentHistoricalPath, set3DModelVisible,
-         set3DModelOutline, setAllModelsViewableAtDistance } from './drones.js';
-
-// ========== Feature Flags ==========
-const SHOW_3D_MODELS = false;
+// Import measurement functions from drones.js
+import { setMeasurementEnabled, setCurrentHistoricalPath, setSimEnabled } from './drones.js';
 
 let viewerRef = null;
 let available = [];
@@ -77,9 +73,7 @@ const AIRCRAFT_ABOVE_LINE = [
 
 // Aircraft below the separator line (other/reference)
 const AIRCRAFT_BELOW_LINE = [
-    "Sim",
-    "Olsen",
-    "N2406P"
+    "Olsen"
 ];
 
 // Combined order for Show All / Hide All
@@ -210,6 +204,29 @@ function createAircraftRow(droneID) {
     row.appendChild(cb);
     row.appendChild(fullPathCb);
     row.appendChild(label);
+
+    // Add Sim checkbox for N97CX only
+    if (droneID === "N97CX") {
+        const simCb = document.createElement("input");
+        simCb.type = "checkbox";
+        simCb.checked = false;
+        simCb.title = "Show simulated continuation (what-if scenario)";
+        simCb.style.marginLeft = "4px";
+
+        const simLabel = document.createElement("label");
+        simLabel.innerText = "Rwy 30L Continue";
+        simLabel.style.marginLeft = "2px";
+        simLabel.style.fontSize = "12px";
+        simLabel.style.cursor = "pointer";
+        simLabel.onclick = () => { simCb.checked = !simCb.checked; simCb.dispatchEvent(new Event('change')); };
+
+        simCb.addEventListener("change", () => {
+            setSimEnabled(simCb.checked);
+        });
+
+        row.appendChild(simCb);
+        row.appendChild(simLabel);
+    }
 
     state.checkboxes[droneID] = cb;
     state.fullPathCbs[droneID] = fullPathCb;
@@ -1050,132 +1067,6 @@ function buildAircraftList() {
         const row = createAircraftRow(id);
         if (row) listContainer.appendChild(row);
     });
-
-    // ========== 3D Models Section ==========
-    if (SHOW_3D_MODELS) {
-        listContainer.appendChild(createSeparator());
-
-        const models3DSection = document.createElement("div");
-        models3DSection.style.marginTop = "4px";
-
-        // Viewable at dx checkbox (above section label)
-        const viewableRow = document.createElement("div");
-        viewableRow.style.display = "flex";
-        viewableRow.style.alignItems = "center";
-        viewableRow.style.marginBottom = "6px";
-
-        const viewableCb = document.createElement("input");
-        viewableCb.type = "checkbox";
-        viewableCb.checked = false;
-        viewableCb.title = "Keep 3D models visible at any distance (minimum 48 pixels)";
-
-        viewableCb.addEventListener("change", () => {
-            setAllModelsViewableAtDistance(viewableCb.checked);
-        });
-
-        const viewableLabel = document.createElement("label");
-        viewableLabel.innerText = "Viewable at dx";
-        viewableLabel.style.marginLeft = "4px";
-        viewableLabel.style.fontSize = "11px";
-        viewableLabel.style.color = "#aaa";
-        viewableLabel.style.cursor = "pointer";
-        viewableLabel.onclick = () => {
-            viewableCb.checked = !viewableCb.checked;
-            viewableCb.dispatchEvent(new Event('change'));
-        };
-
-        viewableRow.appendChild(viewableCb);
-        viewableRow.appendChild(viewableLabel);
-        models3DSection.appendChild(viewableRow);
-
-        // Section label
-        const models3DLabel = document.createElement("div");
-        models3DLabel.innerText = "3D Models (HPB orientation)";
-        models3DLabel.style.fontSize = "10px";
-        models3DLabel.style.color = "#888";
-        models3DLabel.style.marginBottom = "4px";
-        models3DSection.appendChild(models3DLabel);
-
-        // N97CX 3D model checkbox with outline
-        const n97cx3DRow = document.createElement("div");
-        n97cx3DRow.style.display = "flex";
-        n97cx3DRow.style.alignItems = "center";
-        n97cx3DRow.style.marginBottom = "2px";
-
-        const n97cx3DCb = document.createElement("input");
-        n97cx3DCb.type = "checkbox";
-        n97cx3DCb.checked = false;
-        n97cx3DCb.title = "Show N97CX with 3D Bonanza model and actual flight attitude";
-
-        n97cx3DCb.addEventListener("change", async () => {
-            await set3DModelVisible('N97CX', n97cx3DCb.checked);
-        });
-
-        const n97cx3DLabel = document.createElement("label");
-        n97cx3DLabel.innerText = "N97CX 3D";
-        n97cx3DLabel.style.marginLeft = "4px";
-        n97cx3DLabel.style.fontSize = "12px";
-        n97cx3DLabel.style.color = "#FF6B6B";
-        n97cx3DLabel.style.flex = "1";
-
-        const n97cxOutlineCb = document.createElement("input");
-        n97cxOutlineCb.type = "checkbox";
-        n97cxOutlineCb.checked = false;
-        n97cxOutlineCb.title = "Toggle yellow outline on N97CX model";
-        n97cxOutlineCb.style.marginLeft = "8px";
-        n97cxOutlineCb.style.outline = "2px solid #FFFF00";
-        n97cxOutlineCb.style.outlineOffset = "1px";
-
-        n97cxOutlineCb.addEventListener("change", () => {
-            set3DModelOutline('N97CX', n97cxOutlineCb.checked);
-        });
-
-        n97cx3DRow.appendChild(n97cx3DCb);
-        n97cx3DRow.appendChild(n97cx3DLabel);
-        n97cx3DRow.appendChild(n97cxOutlineCb);
-        models3DSection.appendChild(n97cx3DRow);
-
-        // N160RA 3D model checkbox with outline
-        const n160ra3DRow = document.createElement("div");
-        n160ra3DRow.style.display = "flex";
-        n160ra3DRow.style.alignItems = "center";
-        n160ra3DRow.style.marginBottom = "2px";
-
-        const n160ra3DCb = document.createElement("input");
-        n160ra3DCb.type = "checkbox";
-        n160ra3DCb.checked = false;
-        n160ra3DCb.title = "Show N160RA with 3D Cessna 172 model and actual flight attitude";
-
-        n160ra3DCb.addEventListener("change", async () => {
-            await set3DModelVisible('N160RA', n160ra3DCb.checked);
-        });
-
-        const n160ra3DLabel = document.createElement("label");
-        n160ra3DLabel.innerText = "N160RA 3D";
-        n160ra3DLabel.style.marginLeft = "4px";
-        n160ra3DLabel.style.fontSize = "12px";
-        n160ra3DLabel.style.color = "#4ECDC4";
-        n160ra3DLabel.style.flex = "1";
-
-        const n160raOutlineCb = document.createElement("input");
-        n160raOutlineCb.type = "checkbox";
-        n160raOutlineCb.checked = false;
-        n160raOutlineCb.title = "Toggle cyan outline on N160RA model";
-        n160raOutlineCb.style.marginLeft = "8px";
-        n160raOutlineCb.style.outline = "2px solid #00FFFF";
-        n160raOutlineCb.style.outlineOffset = "1px";
-
-        n160raOutlineCb.addEventListener("change", () => {
-            set3DModelOutline('N160RA', n160raOutlineCb.checked);
-        });
-
-        n160ra3DRow.appendChild(n160ra3DCb);
-        n160ra3DRow.appendChild(n160ra3DLabel);
-        n160ra3DRow.appendChild(n160raOutlineCb);
-        models3DSection.appendChild(n160ra3DRow);
-
-        listContainer.appendChild(models3DSection);
-    }
 }
 
 // ===========================================================

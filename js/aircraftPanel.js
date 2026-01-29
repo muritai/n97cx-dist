@@ -27,8 +27,12 @@
 //
 // ===========================================================
 
-// Import measurement functions from drones.js
-import { setMeasurementEnabled, setCurrentHistoricalPath, setSimEnabled } from './drones.js';
+// Import measurement functions and 3D model control from drones.js
+import { setMeasurementEnabled, setCurrentHistoricalPath, set3DModelVisible,
+         set3DModelOutline, setAllModelsViewableAtDistance } from './drones.js';
+
+// ========== Feature Flags ==========
+const SHOW_3D_MODELS = true;  // Set to false to hide 3D model checkboxes
 
 let viewerRef = null;
 let available = [];
@@ -53,6 +57,7 @@ const state = {
     expanded: false,
     checkboxes: {},      // droneID → checkbox element (visibility)
     fullPathCbs: {},     // droneID → checkbox element (full path)
+    model3DCbs: {},      // droneID → checkbox element (3D model)
     historicalExpanded: false,
     historicalVisible: false,
     historicalRunwayCheckboxes: {},  // runway → { checkbox, files }
@@ -72,9 +77,8 @@ const AIRCRAFT_ABOVE_LINE = [
 ];
 
 // Aircraft below the separator line (other/reference)
-const AIRCRAFT_BELOW_LINE = [
-    "Olsen"
-];
+// Note: Sim, Olsen, N2406P removed for distribution version
+const AIRCRAFT_BELOW_LINE = [];
 
 // Combined order for Show All / Hide All
 export const AIRCRAFT_ORDER = [...AIRCRAFT_ABOVE_LINE, ...AIRCRAFT_BELOW_LINE];
@@ -205,29 +209,6 @@ function createAircraftRow(droneID) {
     row.appendChild(fullPathCb);
     row.appendChild(label);
 
-    // Add Sim checkbox for N97CX only
-    if (droneID === "N97CX") {
-        const simCb = document.createElement("input");
-        simCb.type = "checkbox";
-        simCb.checked = false;
-        simCb.title = "Show simulated continuation (what-if scenario)";
-        simCb.style.marginLeft = "4px";
-
-        const simLabel = document.createElement("label");
-        simLabel.innerText = "Rwy 30L Continue";
-        simLabel.style.marginLeft = "2px";
-        simLabel.style.fontSize = "12px";
-        simLabel.style.cursor = "pointer";
-        simLabel.onclick = () => { simCb.checked = !simCb.checked; simCb.dispatchEvent(new Event('change')); };
-
-        simCb.addEventListener("change", () => {
-            setSimEnabled(simCb.checked);
-        });
-
-        row.appendChild(simCb);
-        row.appendChild(simLabel);
-    }
-
     state.checkboxes[droneID] = cb;
     state.fullPathCbs[droneID] = fullPathCb;
 
@@ -245,6 +226,12 @@ function createSeparator() {
     sep.style.margin = "8px 0";
     return sep;
 }
+
+
+
+// ===========================================================
+//                GHOST PATHS SECTION
+// ===========================================================
 
 // ===========================================================
 //              HISTORICAL APPROACHES SECTION
@@ -309,6 +296,7 @@ function parseHistoricalCSV(csvText, filename) {
 
     if (dataPoints.length === 0) return { positions: [], dataPoints: [] };
 
+    console.log(`${filename}: Loaded ${dataPoints.length} points (corrected_alt)`);
     return { positions, dataPoints };
 }
 
@@ -332,6 +320,7 @@ async function loadHistoricalApproaches() {
         return;
     }
     
+    console.log(`Loading ${historicalApproachFiles.length} historical approaches...`);
     
     for (let i = 0; i < historicalApproachFiles.length; i++) {
         const filename = historicalApproachFiles[i];
@@ -379,6 +368,7 @@ async function loadHistoricalApproaches() {
         }
     }
     
+    console.log(`✅ Loaded ${historicalEntities.length} historical approach paths`);
     
     // Setup hover handler if not already done
     setupHistoricalHoverHandler();
@@ -524,6 +514,7 @@ function isolateHistoricalPath(entity) {
         }
     });
     isolatedEntity = entity;
+    console.log(`Isolated: ${entity.name}`);
 }
 
 /**
@@ -534,10 +525,12 @@ function restoreAllHistoricalPaths() {
         e.show = true;
     });
     isolatedEntity = null;
+    console.log('Restored all historical paths');
 }
 
 /**
  * Categorize historical approach files by runway
+ * Note: G141 (accident flight) appears in both 30L and 30R (Acc Flt) categories
  */
 function categorizeByRunway(files) {
     const categories = {
@@ -546,7 +539,7 @@ function categorizeByRunway(files) {
         '30L': [],
         '30R': []
     };
-    
+
     files.forEach(filename => {
         if (filename.includes('_arr_12R')) {
             categories['12R'].push(filename);
@@ -554,11 +547,15 @@ function categorizeByRunway(files) {
             categories['12L'].push(filename);
         } else if (filename.includes('_arr_30L')) {
             categories['30L'].push(filename);
+            // G141 (accident flight) also appears in 30R (Acc Flt) category
+            if (filename.includes('G141')) {
+                categories['30R'].push(filename);
+            }
         } else if (filename.includes('_arr_30R')) {
             categories['30R'].push(filename);
         }
     });
-    
+
     return categories;
 }
 
@@ -628,6 +625,7 @@ function createHistoricalApproachesSection() {
             }
         }
         
+        console.log(`Measurement ${measureCb.checked ? 'enabled' : 'disabled'}`);
     });    
 
     // Make label clickable too
@@ -685,7 +683,9 @@ function createHistoricalApproachesSection() {
         cb.title = `Show/hide approaches to runway ${runway}`;
         
         const lbl = document.createElement("label");
-        lbl.innerText = `Rwy ${runway} (${files.length})`;
+        // Special label for 30R (accident flight)
+        const labelText = runway === '30R' ? 'Acc Flt' : `Rwy ${runway} (${files.length})`;
+        lbl.innerText = labelText;
         lbl.style.marginLeft = "4px";
         lbl.style.fontSize = "11px";
         lbl.style.color = runwayColors[runway];
@@ -753,6 +753,7 @@ function createHistoricalApproachesSection() {
  * Load historical approaches for a specific runway
  */
 async function loadHistoricalApproachesByRunway(runway, files, baseColorHex) {
+    console.log(`Loading ${files.length} historical approaches for runway ${runway}...`);
     
     // Create base color for this runway
     const baseColor = Cesium.Color.fromCssColorString(baseColorHex);
@@ -766,6 +767,10 @@ async function loadHistoricalApproachesByRunway(runway, files, baseColorHex) {
         const existing = historicalEntities.find(e => e.id === entityId);
         if (existing) {
             existing.show = true;
+            // For G141 loaded via Acc Flt (30R), ensure it uses the coral color
+            if (runway === '30R' && filename.includes('G141')) {
+                existing.polyline.material = Cesium.Color.fromCssColorString(baseColorHex).withAlpha(0.6);
+            }
             continue;
         }
         
@@ -827,6 +832,7 @@ async function loadHistoricalApproachesByRunway(runway, files, baseColorHex) {
         }
     }
     
+    console.log(`✅ Loaded approaches for runway ${runway}`);
     
     // Setup hover handler if not already done
     if (!hoverHandlerSetup) {
@@ -935,19 +941,36 @@ function setupHistoricalClickHandler() {
         }
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
     
+    console.log('✅ Historical approach click handler initialized');
 }
 
 /**
  * Hide historical approaches for a specific runway
  */
 function hideHistoricalApproachesByRunway(runway) {
+    // Check if 30L checkbox is checked (for G141 special handling)
+    const rwy30LChecked = state.historicalRunwayCheckboxes?.['30L']?.checkbox?.checked;
+    const rwy30RChecked = state.historicalRunwayCheckboxes?.['30R']?.checkbox?.checked;
+
     historicalEntities.forEach(entity => {
         const props = entity.properties;
+        const isG141 = entity.id && entity.id.includes('G141');
+
+        // Special case: G141 appears in both 30L and 30R
+        // Only hide if BOTH checkboxes are unchecked
+        if (isG141) {
+            if (!rwy30LChecked && !rwy30RChecked) {
+                entity.show = false;
+            }
+            return;
+        }
+
+        // Normal case: hide if runway matches
         if (props && props.runway && props.runway.getValue() === runway) {
             entity.show = false;
         }
     });
-    
+
     // Clear measurement when hiding paths
     setCurrentHistoricalPath(null, null);
 }
@@ -1067,6 +1090,139 @@ function buildAircraftList() {
         const row = createAircraftRow(id);
         if (row) listContainer.appendChild(row);
     });
+
+    // ========== 3D Models Section ==========
+    if (SHOW_3D_MODELS) {
+        listContainer.appendChild(createSeparator());
+
+        const models3DSection = document.createElement("div");
+        models3DSection.style.marginTop = "4px";
+
+        // Viewable at dx checkbox (above section label)
+        const viewableRow = document.createElement("div");
+        viewableRow.style.display = "flex";
+        viewableRow.style.alignItems = "center";
+        viewableRow.style.marginBottom = "6px";
+
+        const viewableCb = document.createElement("input");
+        viewableCb.type = "checkbox";
+        viewableCb.checked = false;
+        viewableCb.title = "Keep 3D models visible at any distance (minimum 48 pixels)";
+
+        viewableCb.addEventListener("change", () => {
+            setAllModelsViewableAtDistance(viewableCb.checked);
+            setAllGhostsViewableAtDistance(viewableCb.checked);
+        });
+
+        const viewableLabel = document.createElement("label");
+        viewableLabel.innerText = "Viewable at dx";
+        viewableLabel.style.marginLeft = "4px";
+        viewableLabel.style.fontSize = "11px";
+        viewableLabel.style.color = "#aaa";
+        viewableLabel.style.cursor = "pointer";
+        viewableLabel.onclick = () => {
+            viewableCb.checked = !viewableCb.checked;
+            viewableCb.dispatchEvent(new Event('change'));
+        };
+
+        viewableRow.appendChild(viewableCb);
+        viewableRow.appendChild(viewableLabel);
+        models3DSection.appendChild(viewableRow);
+
+        // Section label
+        const models3DLabel = document.createElement("div");
+        models3DLabel.innerText = "3D Models (HPB orientation)";
+        models3DLabel.style.fontSize = "10px";
+        models3DLabel.style.color = "#888";
+        models3DLabel.style.marginBottom = "4px";
+        models3DSection.appendChild(models3DLabel);
+
+        // N97CX 3D model checkbox with outline
+        const n97cx3DRow = document.createElement("div");
+        n97cx3DRow.style.display = "flex";
+        n97cx3DRow.style.alignItems = "center";
+        n97cx3DRow.style.marginBottom = "2px";
+
+        const n97cx3DCb = document.createElement("input");
+        n97cx3DCb.type = "checkbox";
+        n97cx3DCb.checked = false;
+        n97cx3DCb.title = "Show N97CX with 3D PropJet model and actual flight attitude";
+
+        n97cx3DCb.addEventListener("change", async () => {
+            await set3DModelVisible('N97CX', n97cx3DCb.checked);
+        });
+
+        // Store in state for programmatic access
+        state.model3DCbs['N97CX'] = n97cx3DCb;
+
+        const n97cx3DLabel = document.createElement("label");
+        n97cx3DLabel.innerText = "N97CX 3D";
+        n97cx3DLabel.style.marginLeft = "4px";
+        n97cx3DLabel.style.fontSize = "12px";
+        n97cx3DLabel.style.color = "#FF6B6B";
+        n97cx3DLabel.style.flex = "1";
+
+        const n97cxOutlineCb = document.createElement("input");
+        n97cxOutlineCb.type = "checkbox";
+        n97cxOutlineCb.checked = false;
+        n97cxOutlineCb.title = "Toggle yellow highlight to find N97CX model";
+        n97cxOutlineCb.style.marginLeft = "8px";
+        n97cxOutlineCb.style.outline = "2px solid #FFFF00";
+        n97cxOutlineCb.style.outlineOffset = "1px";
+
+        n97cxOutlineCb.addEventListener("change", () => {
+            set3DModelOutline('N97CX', n97cxOutlineCb.checked);
+        });
+
+        n97cx3DRow.appendChild(n97cx3DCb);
+        n97cx3DRow.appendChild(n97cx3DLabel);
+        n97cx3DRow.appendChild(n97cxOutlineCb);
+        models3DSection.appendChild(n97cx3DRow);
+
+        // N160RA 3D model checkbox with outline
+        const n160ra3DRow = document.createElement("div");
+        n160ra3DRow.style.display = "flex";
+        n160ra3DRow.style.alignItems = "center";
+        n160ra3DRow.style.marginBottom = "2px";
+
+        const n160ra3DCb = document.createElement("input");
+        n160ra3DCb.type = "checkbox";
+        n160ra3DCb.checked = false;
+        n160ra3DCb.title = "Show N160RA with 3D Cessna 172 model and actual flight attitude";
+
+        n160ra3DCb.addEventListener("change", async () => {
+            await set3DModelVisible('N160RA', n160ra3DCb.checked);
+        });
+
+        // Store in state for programmatic access
+        state.model3DCbs['N160RA'] = n160ra3DCb;
+
+        const n160ra3DLabel = document.createElement("label");
+        n160ra3DLabel.innerText = "N160RA 3D";
+        n160ra3DLabel.style.marginLeft = "4px";
+        n160ra3DLabel.style.fontSize = "12px";
+        n160ra3DLabel.style.color = "#4ECDC4";
+        n160ra3DLabel.style.flex = "1";
+
+        const n160raOutlineCb = document.createElement("input");
+        n160raOutlineCb.type = "checkbox";
+        n160raOutlineCb.checked = false;
+        n160raOutlineCb.title = "Toggle cyan highlight to find N160RA model";
+        n160raOutlineCb.style.marginLeft = "8px";
+        n160raOutlineCb.style.outline = "2px solid #00FFFF";
+        n160raOutlineCb.style.outlineOffset = "1px";
+
+        n160raOutlineCb.addEventListener("change", () => {
+            set3DModelOutline('N160RA', n160raOutlineCb.checked);
+        });
+
+        n160ra3DRow.appendChild(n160ra3DCb);
+        n160ra3DRow.appendChild(n160ra3DLabel);
+        n160ra3DRow.appendChild(n160raOutlineCb);
+        models3DSection.appendChild(n160ra3DRow);
+
+        listContainer.appendChild(models3DSection);
+    }
 }
 
 // ===========================================================
@@ -1110,4 +1266,62 @@ export function refreshAircraftPanel() {
 // Export for external access if needed
 export function getHistoricalEntities() {
     return historicalEntities;
+}
+
+/**
+ * Set up collision view state:
+ * - Uncheck and hide all aircraft markers/paths/labels
+ * - Check and show 3D models for N97CX and N160RA
+ */
+export async function setCollisionViewState(enabled) {
+    if (enabled) {
+        // Uncheck and unload ALL aircraft (including CX and RA)
+        const allAircraft = ['N97CX', 'N160RA', 'XSM55', 'N738CY', 'N466MD', 'N90MX', 'N786TX', 'Olsen', 'N2406P'];
+        allAircraft.forEach(droneID => {
+            // Uncheck visibility checkbox
+            if (state.checkboxes[droneID]) {
+                state.checkboxes[droneID].checked = false;
+            }
+            // Uncheck full path checkbox
+            if (state.fullPathCbs[droneID]) {
+                state.fullPathCbs[droneID].checked = false;
+                if (hideFullPath) hideFullPath(droneID);
+            }
+            // Unload the aircraft entity
+            if (unloadDrone) unloadDrone(droneID);
+        });
+
+        // Check and enable 3D models for collision aircraft
+        if (state.model3DCbs['N97CX']) {
+            state.model3DCbs['N97CX'].checked = true;
+        }
+        if (state.model3DCbs['N160RA']) {
+            state.model3DCbs['N160RA'].checked = true;
+        }
+        await set3DModelVisible('N97CX', true);
+        await set3DModelVisible('N160RA', true);
+
+        console.log('Collision view state: enabled');
+    } else {
+        // Restore normal state - uncheck 3D models, recheck main aircraft
+        if (state.model3DCbs['N97CX']) {
+            state.model3DCbs['N97CX'].checked = false;
+        }
+        if (state.model3DCbs['N160RA']) {
+            state.model3DCbs['N160RA'].checked = false;
+        }
+        await set3DModelVisible('N97CX', false);
+        await set3DModelVisible('N160RA', false);
+
+        // Re-enable default aircraft
+        const defaultAircraft = ['N97CX', 'N160RA', 'XSM55', 'N738CY', 'N466MD'];
+        defaultAircraft.forEach(droneID => {
+            if (state.checkboxes[droneID]) {
+                state.checkboxes[droneID].checked = true;
+            }
+            if (loadDrone) loadDrone(droneID);
+        });
+
+        console.log('Collision view state: disabled');
+    }
 }

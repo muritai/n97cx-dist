@@ -8,6 +8,7 @@ let ATCTLon = null;
 
 let reportingPointEntities = [];
 let referencePointEntities = [];  // For Lauer X and similar
+let lauerBearingLineEntity = null;  // Line from ATCT through Lauer X
 let panel, toggleBtn, listContainer;
 let panelVisible = false;
 
@@ -16,7 +17,7 @@ let panelVisible = false;
 // ===========================================================
 
 const DEFAULT_REPORTING_POINTS = [
-    { name: "Lone Mountain *", distanceNM: 6.0,   bearingDeg: 315 },
+    { name: "Lone Mountain", distanceNM: 6.0,   bearingDeg: 315 },
     { name: "Kyle Canyon Road", distanceNM: 10.0, bearingDeg: 315 },
     { name: "Centennial Hills Hospital", distanceNM: 7.5, bearingDeg: 315 },
     { name: "I – 215 & HWY 95 Intersection", distanceNM: 6.5, bearingDeg: 315 },
@@ -24,23 +25,23 @@ const DEFAULT_REPORTING_POINTS = [
 
     { name: "Aliante Casino & Hotel", distanceNM: 5.75, bearingDeg: 0 },
 
-    { name: "Craig Ranch Regional Park *", distanceNM: 3.25, bearingDeg: 45 },
+    { name: "Craig Ranch Regional Park", distanceNM: 3.25, bearingDeg: 45 },
 
-    { name: "Three Fingers Lake *", distanceNM: 4.0, bearingDeg: 270 },
-    { name: "Mountain View Hospital / HWY 95 & Cheyenne *", distanceNM: 3.5, bearingDeg: 270 },
+    { name: "Three Fingers Lake", distanceNM: 4.0, bearingDeg: 270 },
+    { name: "Mtn View Hosp / HWY 95 & Cheyenne", distanceNM: 3.5, bearingDeg: 270 },
     { name: "The Resorts", distanceNM: 7.0, bearingDeg: 270 },
 
     { name: "Summerlin Hospital", distanceNM: 6.0, bearingDeg: 225 },
     { name: "Suncoast Casino & Hotel", distanceNM: 6.25, bearingDeg: 225 },
     { name: "Red Rock Retention Basin", distanceNM: 9.0, bearingDeg: 225 },
     { name: "Red Rock Casino & Hotel / Golf Course", distanceNM: 8.75, bearingDeg: 225 },
-    { name: "Bank of America *", distanceNM: 4.0, bearingDeg: 225 },
+    { name: "Bank of America", distanceNM: 4.0, bearingDeg: 225 },
 
-    { name: "Spaghetti Bowl *", distanceNM: 3.0, bearingDeg: 135 },
-    { name: "Stratosphere *", distanceNM: 4.25, bearingDeg: 135 },
-    { name: "El Cortez Hotel *", distanceNM: 4.0, bearingDeg: 135 },
+    { name: "Spaghetti Bowl", distanceNM: 3.0, bearingDeg: 135 },
+    { name: "Stratosphere", distanceNM: 4.25, bearingDeg: 135 },
+    { name: "El Cortez Hotel", distanceNM: 4.0, bearingDeg: 135 },
 
-    { name: "Meadows Mall *", distanceNM: 2.75, bearingDeg: 180 },
+    { name: "Meadows Mall", distanceNM: 2.75, bearingDeg: 180 },
 
     { name: "EG&G Building", distanceNM: 3.0, bearingDeg: 90 }
 ];
@@ -233,6 +234,66 @@ async function createReferencePoints() {
 }
 
 // ===========================================================
+//        LAUER BEARING LINE (ATCT through Lauer X, 3nm beyond)
+// ===========================================================
+
+function createLauerBearingLine() {
+    // Find Lauer X reference point
+    const lauerX = REFERENCE_POINTS.find(p => p.name === "Lauer 'X'");
+    if (!lauerX) return;
+
+    // Calculate bearing from ATCT to Lauer X
+    const φ1 = Cesium.Math.toRadians(ATCTLat);
+    const φ2 = Cesium.Math.toRadians(lauerX.lat);
+    const Δλ = Cesium.Math.toRadians(lauerX.lon - ATCTLon);
+
+    const y = Math.sin(Δλ) * Math.cos(φ2);
+    const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+    const bearingRad = Math.atan2(y, x);
+    const bearingDeg = Cesium.Math.toDegrees(bearingRad);
+
+    // Calculate distance from ATCT to Lauer X
+    const R = 6371000.0;  // Earth radius in meters
+    const Δφ = φ2 - φ1;
+    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+              Math.cos(φ1) * Math.cos(φ2) *
+              Math.sin(Δλ/2) * Math.sin(Δλ/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    const distanceToLauerM = R * c;
+    const distanceToLauerNM = distanceToLauerM / 1852.0;
+
+    // Extend line 2nm beyond Lauer X
+    const totalDistanceNM = distanceToLauerNM + 2.0;
+    const endPoint = destinationFromATCT(totalDistanceNM, bearingDeg);
+
+    // Create the line entity (hidden by default) - dot-dashed yellow
+    lauerBearingLineEntity = viewerRef.entities.add({
+        show: false,
+        polyline: {
+            positions: Cesium.Cartesian3.fromDegreesArray([
+                ATCTLon, ATCTLat,
+                endPoint.lon, endPoint.lat
+            ]),
+            width: 3,
+            material: new Cesium.PolylineDashMaterialProperty({
+                color: Cesium.Color.YELLOW,
+                dashLength: 16.0,
+                dashPattern: 255  // 0b11111111 = dot-dash pattern
+            }),
+            clampToGround: true
+        }
+    });
+
+    console.log(`Lauer bearing line: ${bearingDeg.toFixed(1)}°, ${distanceToLauerNM.toFixed(2)} NM to Lauer X, extended to ${totalDistanceNM.toFixed(2)} NM`);
+}
+
+function setLauerBearingLineVisible(show) {
+    if (lauerBearingLineEntity) {
+        lauerBearingLineEntity.show = show;
+    }
+}
+
+// ===========================================================
 //        VISIBILITY API
 // ===========================================================
 
@@ -317,7 +378,53 @@ function buildUI() {
 function buildList() {
     listContainer.innerHTML = "";
 
-    // master row
+    // Reference points section FIRST
+    referencePointEntities.forEach(rp => {
+        const row = document.createElement("div");
+
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.setAttribute("data-type", "reference");
+        cb.onchange = () => setReferenceVisible(rp.cfg.name, cb.checked);
+
+        const label = document.createElement("label");
+        label.style.fontSize = "11px";
+        label.innerText = rp.cfg.name;
+        label.style.marginLeft = "4px";
+
+        row.appendChild(cb);
+        row.appendChild(label);
+        listContainer.appendChild(row);
+
+        // Add Lauer bearing line checkbox after "Lauer 'X'"
+        if (rp.cfg.name === "Lauer 'X'") {
+            const bearingRow = document.createElement("div");
+            bearingRow.style.marginLeft = "18px";  // Indent under Lauer X
+
+            const bearingCb = document.createElement("input");
+            bearingCb.type = "checkbox";
+            bearingCb.setAttribute("data-type", "lauer-bearing");
+            bearingCb.onchange = () => setLauerBearingLineVisible(bearingCb.checked);
+
+            const bearingLabel = document.createElement("label");
+            bearingLabel.style.fontSize = "11px";
+            bearingLabel.style.color = "#FFFF00";  // Yellow to match line color
+            bearingLabel.innerText = "ATCT → Lauer X";
+            bearingLabel.style.marginLeft = "4px";
+
+            bearingRow.appendChild(bearingCb);
+            bearingRow.appendChild(bearingLabel);
+            listContainer.appendChild(bearingRow);
+        }
+    });
+
+    // Separator line
+    const separator = document.createElement("div");
+    separator.style.borderTop = "1px solid #aaa";
+    separator.style.margin = "6px 0";
+    listContainer.appendChild(separator);
+
+    // master row for reporting points
     const master = document.createElement("div");
     master.style.marginBottom = "6px";
 
@@ -350,32 +457,8 @@ function buildList() {
 
         const label = document.createElement("label");
         label.style.fontSize = "11px";
-        label.innerText = `${rp.cfg.name} (${rp.cfg.distanceNM} NM)`;
-        label.style.marginLeft = "4px";
-
-        row.appendChild(cb);
-        row.appendChild(label);
-        listContainer.appendChild(row);
-    });
-
-    // Separator line
-    const separator = document.createElement("div");
-    separator.style.borderTop = "1px solid #aaa";
-    separator.style.margin = "6px 0";
-    listContainer.appendChild(separator);
-
-    // Reference points section
-    referencePointEntities.forEach(rp => {
-        const row = document.createElement("div");
-
-        const cb = document.createElement("input");
-        cb.type = "checkbox";
-        cb.setAttribute("data-type", "reference");
-        cb.onchange = () => setReferenceVisible(rp.cfg.name, cb.checked);
-
-        const label = document.createElement("label");
-        label.style.fontSize = "11px";
-        label.innerText = rp.cfg.name;
+        label.innerText = `${rp.cfg.name}`;
+        //label.innerText = `${rp.cfg.name} (${rp.cfg.distanceNM} NM)`;
         label.style.marginLeft = "4px";
 
         row.appendChild(cb);
@@ -396,5 +479,6 @@ export async function initReportingPoints(viewer, atctLat, atctLon) {
     buildUI();
     await createReportingPoints();
     await createReferencePoints();
+    createLauerBearingLine();
     buildList();
 }

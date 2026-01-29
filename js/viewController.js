@@ -5,11 +5,14 @@
 // Popup menu for selecting camera views:
 //   - Runway - Approach view centered between 30L/30R
 //   - FALCON LIMITS - Top-down matching FALCON display coverage
+//   - Collision View - Collision moment camera position
 //   - Overhead - Original overhead perspective
 //
 // ===========================================================
 
 import { setFalconLimitsVisible, ATCT_POSITION, FALCON_HEIGHT_NM, FALCON_WIDTH_NM } from './FalconLimits.js';
+import { set3DModelVisible } from './drones.js';
+import { setCollisionViewState } from './aircraftPanel.js';
 
 let viewerRef = null;
 let currentViewIndex = 0;
@@ -53,7 +56,7 @@ const VIEWS = [
         getView: () => {
             const coverageNM = Math.max(FALCON_WIDTH_NM, FALCON_HEIGHT_NM);
             const altitudeMeters = coverageNM * 1852 * 0.9;
-            
+
             return {
                 destination: Cesium.Cartesian3.fromDegrees(
                     ATCT_POSITION.lon,
@@ -66,6 +69,52 @@ const VIEWS = [
                     roll: 0
                 }
             };
+        }
+    },
+    {
+        name: "Collision View",
+        buttonLabel: "[+] Collision View",
+        getView: () => {
+            // Set time to collision moment and STOP the clock
+            const collisionTime = Cesium.JulianDate.fromIso8601('2022-07-17T19:02:51.3Z');
+            viewerRef.clock.currentTime = collisionTime;
+            viewerRef.clock.shouldAnimate = false;
+
+            // Use aircraft panel function to properly update checkboxes and state
+            // This hides all aircraft markers/paths/labels and shows only 3D models
+            setCollisionViewState(true);
+
+            // Collision midpoint (between the two aircraft)
+            const collisionLat = 36.202797;
+            const collisionLon = -115.184278;
+            const cessnaAltFt = 2286;
+            const cameraOffsetFt = 18;  // Raise camera to better viewing height
+            const geoidOffsetFt = -91.9;
+            const altMeters = (cessnaAltFt + cameraOffsetFt + geoidOffsetFt) * 0.3048;
+
+            // Camera back along Rwy 30R heading (314°)
+            // Position behind collision, looking NORTHWEST toward 30R
+            const rwy30Heading = 314.4;  // degrees (northwest)
+            const backDistance = 21.5; // meters (20m + 5ft)
+            const backDistDeg = backDistance / 111000;  // rough meters to degrees
+            const headingRad = Cesium.Math.toRadians(rwy30Heading);
+
+            // Move camera back from collision point (opposite of 300° heading = 120°)
+            const cameraLat = collisionLat - backDistDeg * Math.cos(headingRad);
+            const cameraLon = collisionLon - backDistDeg * Math.sin(headingRad) / Math.cos(Cesium.Math.toRadians(collisionLat));
+
+            return {
+                destination: Cesium.Cartesian3.fromDegrees(cameraLon, cameraLat, altMeters),
+                orientation: {
+                    heading: Cesium.Math.toRadians(314.4),  // Look northwest toward Rwy 30R
+                    pitch: Cesium.Math.toRadians(0),      // Level
+                    roll: 0
+                }
+            };
+        },
+        onExit: () => {
+            // Do nothing - leave everything as-is (clock stopped, 3D models visible)
+            console.log('Exited Collision View - state preserved');
         }
     },
     {
@@ -169,25 +218,32 @@ function hideMenu() {
 }
 
 function selectView(index) {
+    // Call onExit for the previous view if it has one
+    const previousView = VIEWS[currentViewIndex];
+    if (previousView && previousView.onExit && currentViewIndex !== index) {
+        previousView.onExit();
+    }
+
     currentViewIndex = index;
     const view = VIEWS[currentViewIndex];
     const viewConfig = view.getView(viewerRef._originalView);
-    
+
     // Toggle FALCON limits visibility based on view selection
     setFalconLimitsVisible(view.name === "FALCON LIMITS");
-    
+
     viewerRef.camera.flyTo({
         destination: viewConfig.destination,
         orientation: viewConfig.orientation,
         duration: 1.0
     });
-    
+
     // Update button text to show current view
     if (viewButton) {
         viewButton.textContent = view.buttonLabel;
     }
-    
+
     hideMenu();
+    console.log(`📍 Camera changed to ${view.name} view`);
 }
 
 /**
@@ -217,6 +273,7 @@ export function setupViewController(viewer, originalView, button = null) {
     const currentView = VIEWS[currentViewIndex];
     setFalconLimitsVisible(currentView.name === "FALCON LIMITS");
     
+    console.log(`View controller initialized with ${VIEWS.length} views`);
 }
 
 /**
@@ -270,4 +327,5 @@ export function addView(name, buttonLabel, getViewFn) {
         menuElement = null;
     }
     
+    console.log(`Added view: ${name}. Total views: ${VIEWS.length}`);
 }

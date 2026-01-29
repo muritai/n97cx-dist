@@ -2,7 +2,7 @@
 //                   TCAS DISPLAY MODULE
 // ===========================================================
 //
-// Displays NTSB CDTI simulation images synchronized with
+// Displays NTSB TCAS simulation images synchronized with
 // the Cesium clock. Images shown on-demand when available.
 //
 // Times in filenames are LOCAL (GMT-7), converted to UTC.
@@ -120,7 +120,7 @@ function createOverlay() {
         font-size: 12px;
         font-family: monospace;
     `;
-    titleText.textContent = 'NTSB CDTI';
+    titleText.textContent = 'NTSB TCAS';
     
     const closeBtn = document.createElement('button');
     closeBtn.textContent = '✕';
@@ -216,7 +216,7 @@ function showDisplay() {
     
     const timeLabel = document.getElementById('tcasTimeLabel');
     if (timeLabel) {
-        timeLabel.textContent = `NTSB CDTI @ ${frame.timeUTC} UTC`;
+        timeLabel.textContent = `NTSB TCAS @ ${frame.timeUTC} UTC`;
     }
     
     tcasOverlay.style.display = 'block';
@@ -282,7 +282,7 @@ export function setupTCASDisplay(viewer) {
     // Create button (matches other UI buttons - minimal styling)
     // Starts grayed out until TCAS time range
     tcasButton = document.createElement('button');
-    tcasButton.textContent = 'NTSB CDTI';
+    tcasButton.textContent = 'NTSB TCAS';
     tcasButton.disabled = true;
     tcasButton.style.position = 'absolute';
     tcasButton.style.top = '20px';

@@ -58,15 +58,23 @@ function createClockDisplay() {
 
 function updateClock(clock) {
     if (!clockDisplay) return;
-    
+
     const currentTime = Cesium.JulianDate.toDate(clock.currentTime);
-    
+
+    // Convert UTC to local time (PDT = UTC-7)
+    const LOCAL_OFFSET_HOURS = -7;
+    let hours = currentTime.getUTCHours() + LOCAL_OFFSET_HOURS;
+
+    // Handle day wrap
+    if (hours < 0) hours += 24;
+    if (hours >= 24) hours -= 24;
+
     // Format as HH:MM:SS
-    const hours = String(currentTime.getUTCHours()).padStart(2, '0');
+    const hoursStr = String(hours).padStart(2, '0');
     const minutes = String(currentTime.getUTCMinutes()).padStart(2, '0');
     const seconds = String(currentTime.getUTCSeconds()).padStart(2, '0');
-    
-    clockDisplay.textContent = `${hours}:${minutes}:${seconds} UTC`;
+
+    clockDisplay.textContent = `${hoursStr}:${minutes}:${seconds} PDT`;
     
     // Also update camera info if panel is expanded
     if (cameraExpanded) {

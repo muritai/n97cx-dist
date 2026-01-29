@@ -6,12 +6,14 @@
 //   setupFollowView(viewer, followBtn)
 //   disableFollowView()
 //   isFollowEnabled()
+//   getSmoothedFollowPosition()  - Returns smoothed position for 3D model sync
 //
 // Behavior:
-//   - Follow-button toggles cockpit POV of N97CX
-//   - Heading is estimated from position data
-//   - Bank is taken from CSV (piperRollData), or estimated
+//   - Follow-button toggles tail view POV of N97CX (camera behind aircraft)
+//   - Heading/pitch/bank from HPB data, with fallback to estimated values
+//   - Camera and 3D model share smoothed position (prevents jitter)
 //   - Hides N97CX point, label, history, and ground line in follow mode
+//   - Keeps 3D model visible for tail view
 //   - Auto-disables when ATCT view is active
 //
 // ===========================================================
@@ -19,32 +21,42 @@
 import { disableATCT } from "./atctView.js";
 import {
     getPiperRollAt,
-    getRollAt,
     estimateBankAngle,
     computeHeading,
-    isSimEnabled
+    get3DModelPosition,
+    getModelConfig
 } from "./drones.js";
+import { getOrientation, isHPBLoaded, loadHPBData } from "./hpbOrientationData.js";
 
 let viewerRef = null;
 let followBtnRef = null;
 let followEnabled = false;
 
-const HEADING_BUFFER = [];
-const BANK_BUFFER = [];
-const MAX_BUFFER_SIZE = 15;  // Larger buffer for smoother bank transitions
-
 let previousCamPos = null;
-const POSITION_SMOOTHING = 0.12;  // Balance between smooth and responsive
+const POSITION_SMOOTHING = 1.0;  // 1.0 = no smoothing, use raw position
+
+// Orientation smoothing to blend HPB data transitions
+let previousHeading = null;
+let previousPitch = null;
+let previousBank = null;
+const ORIENTATION_SMOOTHING = 0.3;  // Lower = smoother transitions, higher = more responsive
+
+// Use preRender instead of onTick for tighter timing
+let preRenderHandler = null;
+
+// Smoothed position shared with 3D model (prevents jitter)
+let smoothedModelPosition = null;
+
+// Store original position property to restore when follow ends
+let originalModelPositionProperty = null;
 
 const FOLLOW_TARGET = "N97CX";
 const FIXED_PITCH_DEG = 0;  // Level horizon for cockpit POV
 
-// Simulation extension indicator (after this time, we're in simulated path)
-const SIM_SPLIT_TIME = "2022-07-17T19:02:51Z";
-let simSplitJulian = null;
-let simOverlay = null;
-let simLabel = null;
-let isInSimExtension = false;
+// Tail view: camera behind aircraft, looking at tail (medium chase)
+const TAIL_VIEW_BACK = 25.0;   // Meters behind aircraft
+const TAIL_VIEW_UP = 3.0;    // Meters above aircraft 
+const TAIL_VIEW_LEFT = 0.0;   // Centered behind
 
 // Store original FOV to restore later
 let originalFOV = null;
@@ -67,10 +79,15 @@ export function isFollowEnabled() {
     return followEnabled;
 }
 
+export function getSmoothedFollowPosition() {
+    return smoothedModelPosition;
+}
+
 // ================== TOGGLE ==================
 
 function toggleFollowView() {
     followEnabled = !followEnabled;
+    console.log("TOGGLE followEnabled =", followEnabled);
 
     if (followEnabled) {
         disableATCT(); // Cannot use both
@@ -97,42 +114,44 @@ function deactivateButtonStyle() {
 // ================== SHOW/HIDE N97CX VISUALS ==================
 
 function hideN97CXVisuals() {
-    // Hide the drone point, label, and path trail
     const drone = viewerRef.entities.getById(FOLLOW_TARGET);
     if (drone) {
         drone.show = false;
+        console.log("  Hidden drone entity");
     }
 
-    // Hide history line
+    // Keep 3D model visible for tail view (camera is behind aircraft)
+    const model3DId = `${FOLLOW_TARGET}-3d-model`;
+    const model3D = viewerRef.entities.getById(model3DId);
+    console.log(`  Looking for 3D model: ${model3DId}, found: ${!!model3D}`);
+    if (model3D) {
+        model3D.show = true;  // Keep visible for tail view
+        console.log("  Showing 3D model for tail view");
+    }
+
     const historyLine = viewerRef.entities.getById(`history-${FOLLOW_TARGET}`);
     if (historyLine) {
         historyLine.show = false;
     }
 
-    // Hide ground line
     const groundLine = viewerRef.entities.getById(`groundline-${FOLLOW_TARGET}`);
     if (groundLine) {
         groundLine.show = false;
     }
 
-    // Hide full path (when "All" checkbox is checked)
-    const fullPath = viewerRef.entities.getById(`fullpath-${FOLLOW_TARGET}`);
-    if (fullPath) {
-        fullPath.show = false;
-    }
-
-    // Hide sim path dots
-    viewerRef.entities.values.forEach(entity => {
-        if (entity.id && entity.id.startsWith(`sim-dot-${FOLLOW_TARGET}-`)) {
-            entity.show = false;
-        }
-    });
+    console.log("👁️ N97CX visuals configured for tail view");
 }
 
 function showN97CXVisuals() {
     const drone = viewerRef.entities.getById(FOLLOW_TARGET);
     if (drone) {
         drone.show = true;
+    }
+
+    // Restore the 3D model entity
+    const model3D = viewerRef.entities.getById(`${FOLLOW_TARGET}-3d-model`);
+    if (model3D) {
+        model3D.show = true;
     }
 
     const historyLine = viewerRef.entities.getById(`history-${FOLLOW_TARGET}`);
@@ -145,104 +164,18 @@ function showN97CXVisuals() {
         groundLine.show = true;
     }
 
-    // Show full path (if it exists)
-    const fullPath = viewerRef.entities.getById(`fullpath-${FOLLOW_TARGET}`);
-    if (fullPath) {
-        fullPath.show = true;
-    }
-
-    // Show sim path dots (if sim is enabled)
-    if (isSimEnabled()) {
-        viewerRef.entities.values.forEach(entity => {
-            if (entity.id && entity.id.startsWith(`sim-dot-${FOLLOW_TARGET}-`)) {
-                entity.show = true;
-            }
-        });
-    }
-}
-
-// ================== SIM EXTENSION OVERLAY ==================
-
-function createSimOverlay() {
-    // Create dark overlay
-    simOverlay = document.createElement('div');
-    simOverlay.style.cssText = `
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: rgba(0, 0, 20, 0.3);
-        pointer-events: none;
-        z-index: 999;
-        display: none;
-        transition: opacity 0.5s ease;
-    `;
-    document.body.appendChild(simOverlay);
-
-    // Create flashing label
-    simLabel = document.createElement('div');
-    simLabel.textContent = 'SIM EXTENSION';
-    simLabel.style.cssText = `
-        position: fixed;
-        bottom: 200px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: rgba(255, 100, 0, 0.85);
-        color: white;
-        padding: 8px 20px;
-        font-family: monospace;
-        font-size: 16px;
-        font-weight: bold;
-        border-radius: 4px;
-        z-index: 1000;
-        display: none;
-        animation: simPulse 1.5s ease-in-out infinite;
-    `;
-    document.body.appendChild(simLabel);
-
-    // Add CSS animation
-    const style = document.createElement('style');
-    style.textContent = `
-        @keyframes simPulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-    `;
-    document.head.appendChild(style);
-}
-
-function showSimOverlay() {
-    if (!isInSimExtension) {
-        isInSimExtension = true;
-        if (simOverlay) simOverlay.style.display = 'block';
-        if (simLabel) simLabel.style.display = 'block';
-    }
-}
-
-function hideSimOverlay() {
-    if (isInSimExtension) {
-        isInSimExtension = false;
-        if (simOverlay) simOverlay.style.display = 'none';
-        if (simLabel) simLabel.style.display = 'none';
-    }
-}
-
-function removeSimOverlay() {
-    hideSimOverlay();
-    if (simOverlay) {
-        simOverlay.remove();
-        simOverlay = null;
-    }
-    if (simLabel) {
-        simLabel.remove();
-        simLabel = null;
-    }
+    console.log("👁️ N97CX visuals restored");
 }
 
 // ================== ENABLE / DISABLE ==================
 
-function enableFollow() {
+async function enableFollow() {
+    // Load HPB data if not already loaded (needed for smooth heading/bank)
+    if (!isHPBLoaded(FOLLOW_TARGET)) {
+        console.log(`Loading HPB data for ${FOLLOW_TARGET}...`);
+        await loadHPBData(FOLLOW_TARGET);
+    }
+
     // Store original FOV and set cockpit FOV
     originalFOV = viewerRef.camera.frustum.fov;
     viewerRef.camera.frustum.fov = Cesium.Math.toRadians(COCKPIT_FOV_DEG);
@@ -250,21 +183,26 @@ function enableFollow() {
     // Hide N97CX visuals
     hideN97CXVisuals();
 
-    // Clear buffers for fresh start
-    HEADING_BUFFER.length = 0;
-    BANK_BUFFER.length = 0;
+    // Reset position smoothing
     previousCamPos = null;
+    smoothedModelPosition = null;
+    originalModelPositionProperty = null;  // Will be captured on first use
 
-    // Initialize sim split time and create overlay
-    simSplitJulian = Cesium.JulianDate.fromIso8601(SIM_SPLIT_TIME);
-    createSimOverlay();
+    // Reset orientation smoothing
+    previousHeading = null;
+    previousPitch = null;
+    previousBank = null;
 
-    // Start following
-    viewerRef.clock.onTick.addEventListener(onFollowTick);
+    // Start following - use preRender for tightest timing (right before frame renders)
+    preRenderHandler = viewerRef.scene.preRender.addEventListener(onFollowPreRender);
 }
 
 function disableFollow() {
-    viewerRef.clock.onTick.removeEventListener(onFollowTick);
+    // Remove preRender handler
+    if (preRenderHandler) {
+        preRenderHandler();  // Cesium event listeners return a removal function
+        preRenderHandler = null;
+    }
     viewerRef.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
 
     // Restore original FOV
@@ -273,8 +211,18 @@ function disableFollow() {
         originalFOV = null;
     }
 
-    // Remove sim overlay
-    removeSimOverlay();
+    // Restore original position property for 3D model
+    if (originalModelPositionProperty) {
+        const model3D = viewerRef.entities.getById(`${FOLLOW_TARGET}-3d-model`);
+        if (model3D) {
+            model3D.position = originalModelPositionProperty;
+            console.log('Restored original position property for N97CX 3D model');
+        }
+        originalModelPositionProperty = null;
+    }
+
+    // Reset smoothed position
+    smoothedModelPosition = null;
 
     // Show N97CX visuals again
     showN97CXVisuals();
@@ -285,24 +233,27 @@ function disableFollow() {
 function onFollowTick(clock) {
     if (!followEnabled) return;
 
-    const pastSplitTime = simSplitJulian && Cesium.JulianDate.greaterThan(clock.currentTime, simSplitJulian);
-
-    // If past split time and sim not enabled, stop clock at split time
-    if (pastSplitTime && !isSimEnabled()) {
-        clock.currentTime = Cesium.JulianDate.clone(simSplitJulian);
-        clock.shouldAnimate = false;
-        hideSimOverlay();
-        return;
-    }
-
-    // Show sim overlay only when sim is enabled and past split time
-    if (pastSplitTime && isSimEnabled()) {
-        showSimOverlay();
-    } else {
-        hideSimOverlay();
+    // Ensure N97CX model stays visible for tail view (in case 3D was disabled after follow started)
+    const model3D = viewerRef.entities.getById(`${FOLLOW_TARGET}-3d-model`);
+    if (model3D && !model3D.show) {
+        model3D.show = true;
     }
 
     updateFollowCamera(clock, FOLLOW_TARGET);
+}
+
+// preRender handler - fires right before frame renders for tightest timing
+function onFollowPreRender(scene, time) {
+    if (!followEnabled) return;
+
+    // Ensure N97CX model stays visible for tail view
+    const model3D = viewerRef.entities.getById(`${FOLLOW_TARGET}-3d-model`);
+    if (model3D && !model3D.show) {
+        model3D.show = true;
+    }
+
+    // Use the viewer's clock for the update
+    updateFollowCamera(viewerRef.clock, FOLLOW_TARGET);
 }
 
 // ================== UTIL ==================
@@ -314,67 +265,82 @@ function normalizeAngleRad(angle) {
 // ================== MAIN CAMERA LOGIC ==================
 
 export function updateFollowCamera(clock, droneID = "N97CX") {
-    const drone = viewerRef.entities.getById(droneID);
-    if (!drone) {
-        console.warn("🚨 Drone not found:", droneID);
-        return;
-    }
-
     const time = clock.currentTime;
-    const pos = drone.position?.getValue(time);
+
+    // Try to get position from 3D model first, then fall back to drone entity
+    let pos = null;
+    const positionProperty = get3DModelPosition(droneID);
+    if (positionProperty) {
+        pos = positionProperty.getValue(time);
+    }
+
+    // Fall back to drone entity position
+    if (!pos) {
+        const drone = viewerRef.entities.getById(droneID);
+        if (drone && drone.position) {
+            pos = drone.position.getValue(time);
+        }
+    }
+
     if (!Cesium.defined(pos)) {
-        console.warn("❌ Position undefined at", time.toString());
-        return;
+        return;  // No position available
     }
 
-    // === Estimate heading (forward-looking for better path centering) ===
-    const delta = 0.5;
-    const futureTime = Cesium.JulianDate.addSeconds(time, delta, new Cesium.JulianDate());
-    const pastTime = Cesium.JulianDate.addSeconds(time, -delta, new Cesium.JulianDate());
+    // === Get heading, pitch, bank from HPB data ===
+    let headingDeg, pitchDeg, bankDeg;
 
-    // Try forward-looking first, fall back to backward-looking
-    let p1 = drone.position.getValue(time);
-    let p2 = drone.position.getValue(futureTime);
+    if (isHPBLoaded(droneID)) {
+        const orientation = getOrientation(droneID, time);
+        if (orientation) {
+            headingDeg = orientation.heading;
+            pitchDeg = orientation.pitch;
+            bankDeg = orientation.roll;
 
-    if (!p2) {
-        // Fall back to backward-looking at end of flight data
-        p2 = p1;
-        p1 = drone.position.getValue(pastTime);
-    }
+            // Apply smoothing to blend HPB data transitions (e.g., at 19:02:00)
+            if (previousHeading !== null) {
+                // Handle heading wraparound (e.g., 350° to 10°)
+                let headingDiff = headingDeg - previousHeading;
+                if (headingDiff > 180) headingDiff -= 360;
+                if (headingDiff < -180) headingDiff += 360;
+                headingDeg = previousHeading + headingDiff * ORIENTATION_SMOOTHING;
+                // Normalize to 0-360
+                if (headingDeg < 0) headingDeg += 360;
+                if (headingDeg >= 360) headingDeg -= 360;
 
-    if (!p1 || !p2) {
-        console.warn("⚠️ Cannot estimate heading — missing position samples.");
-        return;
-    }
-
-    let headingRad = computeHeading(p1, p2);
-    headingRad = normalizeAngleRad(headingRad);
-
-    // === Get bank angle ===
-    let bankDeg;
-    const csvRoll = getRollAt(droneID, time);
-
-    if (csvRoll !== null) {
-        // Use CSV data directly for N97CX
-        bankDeg = csvRoll;
+                pitchDeg = previousPitch + (pitchDeg - previousPitch) * ORIENTATION_SMOOTHING;
+                bankDeg = previousBank + (bankDeg - previousBank) * ORIENTATION_SMOOTHING;
+            }
+            previousHeading = headingDeg;
+            previousPitch = pitchDeg;
+            previousBank = bankDeg;
+        } else {
+            return;  // No orientation data
+        }
     } else {
-        // Fall back to estimated bank angle
-        bankDeg = estimateBankAngle(time, drone.position);
+        // Fall back to estimated values
+        const drone = viewerRef.entities.getById(droneID);
+        if (!drone || !drone.position) return;
+
+        const delta = 0.5;
+        const pastTime = Cesium.JulianDate.addSeconds(time, -delta, new Cesium.JulianDate());
+        const p1 = drone.position.getValue(pastTime);
+        const p2 = drone.position.getValue(time);
+
+        if (!p1 || !p2) return;
+
+        headingDeg = Cesium.Math.toDegrees(computeHeading(p1, p2));
+        pitchDeg = 0;
+
+        const csvRoll = getPiperRollAt(time);
+        bankDeg = (csvRoll !== null) ? csvRoll : estimateBankAngle(time, drone.position);
     }
-    
-    let bankRad = normalizeAngleRad(Cesium.Math.toRadians(bankDeg));
 
-    // === Smooth heading and bank ===
-    HEADING_BUFFER.push(headingRad);
-    BANK_BUFFER.push(bankRad);
+    // Convert to radians
+    const headingRad = Cesium.Math.toRadians(headingDeg);
+    const pitchRad = Cesium.Math.toRadians(pitchDeg);
+    const bankRad = Cesium.Math.toRadians(bankDeg);
 
-    if (HEADING_BUFFER.length > MAX_BUFFER_SIZE) HEADING_BUFFER.shift();
-    if (BANK_BUFFER.length > MAX_BUFFER_SIZE) BANK_BUFFER.shift();
-
-    const avgHeading = HEADING_BUFFER.reduce((sum, val) => sum + val, 0) / HEADING_BUFFER.length;
-    const avgBank = BANK_BUFFER.reduce((sum, val) => sum + val, 0) / BANK_BUFFER.length;
-
-    // === Smooth the aircraft position ===
+    // === Smooth position (camera and model will both use this) ===
     if (!previousCamPos) {
         previousCamPos = Cesium.Cartesian3.clone(pos);
     } else {
@@ -385,39 +351,67 @@ export function updateFollowCamera(clock, droneID = "N97CX") {
             new Cesium.Cartesian3()
         );
     }
+    smoothedModelPosition = previousCamPos;  // Share the same position object
 
-    // === Cockpit POV camera offset ===
-    // Piper Meridian: pilot eye position relative to aircraft center
-    const chaseDistance = -3;   // Forward from aircraft center (cockpit near nose)
-    const chaseHeight   = 1.5;  // Pilot eye level above aircraft center
+    // === Let model use its original position property ===
+    // Don't try to override - just let camera and model both use the same raw data source
+    // The camera computes offset from `pos` which comes from the same SampledPositionProperty
+    const model3D = viewerRef.entities.getById(`${droneID}-3d-model`);
+    if (model3D && model3D.show) {
+        // Just update orientation - let position come from original SampledPositionProperty
+        const config = getModelConfig(droneID);
+        if (config) {
+            const adjustedHeading = headingDeg + (config.headingOffset || 0);
+            const adjustedPitch = pitchDeg * (config.pitchMultiplier || 1);
+            const adjustedRoll = bankDeg * (config.rollMultiplier || 1);
 
-    const headingPitchRoll = new Cesium.HeadingPitchRoll(avgHeading, 0, 0);
+            const modelHpr = new Cesium.HeadingPitchRoll(
+                Cesium.Math.toRadians(adjustedHeading),
+                Cesium.Math.toRadians(adjustedPitch),
+                Cesium.Math.toRadians(adjustedRoll)
+            );
+            // Use `pos` (raw position from SampledPositionProperty) for orientation calc
+            model3D.orientation = Cesium.Transforms.headingPitchRollQuaternion(pos, modelHpr);
+        }
+    }
+
+    // Camera also uses `pos` (same raw position) - they should move together
+    smoothedModelPosition = pos;
+
+    // === Tail view camera position ===
+    const cameraForward = -TAIL_VIEW_BACK;  // Meters behind aircraft
+    const cameraUp = TAIL_VIEW_UP;          // Meters above aircraft
+    const cameraLeft = TAIL_VIEW_LEFT;      // Centered behind
+
+    // Build transform at aircraft position (use same position as model)
+    const hprForTransform = new Cesium.HeadingPitchRoll(headingRad, 0, 0);
     const transform = Cesium.Transforms.headingPitchRollToFixedFrame(
-        previousCamPos, 
-        headingPitchRoll, 
+        smoothedModelPosition,
+        hprForTransform,
         Cesium.Ellipsoid.WGS84,
-        Cesium.Transforms.localFrameToFixedFrameDefault
+        Cesium.Transforms.localFrameToFixedFrameGenerator('east', 'north')
     );
 
+    // Camera offset in local frame
     const localOffset = new Cesium.Cartesian3(
-        -chaseDistance,  // X: negative = behind, positive = in front
-        0,               // Y: left/right offset
-        chaseHeight      // Z: up/down offset
+        -cameraLeft,
+        cameraForward,
+        cameraUp
     );
 
     const cameraPos = Cesium.Matrix4.multiplyByPoint(
-        transform, 
-        localOffset, 
+        transform,
+        localOffset,
         new Cesium.Cartesian3()
     );
 
-    // === Set Camera View ===
+    // Set camera view
     viewerRef.camera.setView({
         destination: cameraPos,
         orientation: {
-            heading: avgHeading,
+            heading: headingRad,
             pitch: Cesium.Math.toRadians(FIXED_PITCH_DEG),
-            roll: avgBank
+            roll: bankRad
         }
     });
 }

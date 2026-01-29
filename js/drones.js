@@ -3,7 +3,7 @@
 // ===========================================================
 //                    FEATURE FLAGS
 // ===========================================================
-// Set to false to disable features before deployment
+// Distribution version - ghost paths and analysis tools removed
 const FEATURES = {
     followView: true,
     runwayCenterlines: true,
@@ -11,8 +11,6 @@ const FEATURES = {
     audioSync: true,
     historicalApproaches: true,
 };
-
-
 // ===========================================================
 
 
@@ -21,9 +19,11 @@ export const CESIUM_ION_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOi
 // Re-export measurement functions for aircraftPanel
 export { setMeasurementEnabled, setCurrentHistoricalPath };
 
+// ✅ Set Cesium Ion Token
 Cesium.Ion.defaultAccessToken = CESIUM_ION_TOKEN;
 
 
+// ✅ Initialize viewer only ONCE in drones.js
 export const viewer = new Cesium.Viewer('cesiumContainer', {
     terrainProvider: Cesium.createWorldTerrain({
         requestVertexNormals: true,
@@ -46,9 +46,14 @@ window.viewer = viewer;
 
 let n97cxPositionProperty = null;
 
+// Store all drone position properties persistently (survives entity removal)
+const storedDronePositions = {};
+
+// ✅ Store layer references
 let ionLayer, esriLayer;
 let googleTileset = null;
 
+// ✅ Load ESRI World Imagery by default
 (async () => {
     try {
         esriLayer = viewer.imageryLayers.addImageryProvider(new Cesium.ArcGisMapServerImageryProvider({
@@ -64,15 +69,17 @@ const DEBUG = false;
 
 const GROUND_GEOID_OFFSET_FT = -91.9; // in feet
 
-const centerLon = -115.188626;
-const centerLat = 36.203855;
-const centerAlt = 6000;
+const centerLon = -115.189259;
+const centerLat = 36.206500;
+const centerAlt = 10000;
 
 const ATCTLat = 36.210167;
 const ATCTLon = -115.189259;
 const ATCTHeight = (2168 + 70 + GROUND_GEOID_OFFSET_FT) / 3.28084;  // ~654m ellipsoid height
 
 const atctPosition = Cesium.Cartesian3.fromDegrees(ATCTLon, ATCTLat, ATCTHeight);
+
+import { setupCDTI } from './cdti.js';
 
 import { setupTranscriptSync } from './transcriptSync.js';
 
@@ -90,18 +97,514 @@ if (FEATURES.runwayCenterlines) {
 import { setupTCASDisplay } from './tcasDisplay.js';
 import { setupTCASAlign } from './tcasAlign.js';
 
+// Later, after viewer is created:
+
+// Initialize historical measurement system
 setupHistoricalMeasurement(viewer, ATCTLat, ATCTLon, ATCTHeight);
 
 import { setupMeasurements } from "./measurements.js";
 setupMeasurements(viewer, ATCTLat, ATCTLon);
 
+if (FEATURES.azElRays) {
+    import("./azElRays.js").then(m => {
+        m.setupAzElRays(viewer);
+        if (FEATURES.ambiguitySurface) {
+            m.setupAmbiguitySurface(viewer);
+        }
+    });
+}
+
 import { setupAircraftPanelUI } from "./aircraftPanel.js";
 import { setupATCTView } from "./atctView.js";
 import { setupFollowView, disableFollowView, isFollowEnabled, updateFollowCamera }
     from "./followView.js";
+
 import { setupFalconLimits, toggleFalconLimits, setFalconLimitsVisible } from './FalconLimits.js';
+
+// In your initialization:
 setupFalconLimits(viewer, { visible: false });
+
+// Or set directly:
 setFalconLimitsVisible(false);
+
+// ========== Test Aircraft: PropJet (PA-46 Meridian Proxy) ==========
+// Position: 1.5nm south of ATCT, bearing 180°
+const TEST_AIRCRAFT_CONFIG = {
+    distanceNM: 1.5,        // Distance from ATCT in nautical miles
+    bearing: 180,           // Bearing from ATCT (180° = south)
+    altitudeMSL: 2500,      // Altitude in feet MSL
+    heading: 360,           // Aircraft heading (360° = north)
+    pitch: 0,               // Pitch angle (0° = level)
+    roll: 45,               // Roll angle (0° = wings level)
+    // Scale: May need adjustment based on PropJet model dimensions
+    scale: 1.0
+};
+
+// Calculate position from bearing and distance
+function calculatePositionFromATCT(distanceNM, bearingDeg) {
+    const bearingRad = Cesium.Math.toRadians(bearingDeg);
+    const latOffset = (distanceNM / 60) * Math.cos(bearingRad);
+    const lonOffset = (distanceNM / 60) * Math.sin(bearingRad) / Math.cos(Cesium.Math.toRadians(ATCTLat));
+    return {
+        lat: ATCTLat + latOffset,
+        lon: ATCTLon + lonOffset
+    };
+}
+
+const bonanzaPos = calculatePositionFromATCT(TEST_AIRCRAFT_CONFIG.distanceNM, TEST_AIRCRAFT_CONFIG.bearing);
+const bonanzaAltMeters = (TEST_AIRCRAFT_CONFIG.altitudeMSL + GROUND_GEOID_OFFSET_FT) * 0.3048;
+
+const bonanzaPosition = Cesium.Cartesian3.fromDegrees(bonanzaPos.lon, bonanzaPos.lat, bonanzaAltMeters);
+const bonanzaHpr = new Cesium.HeadingPitchRoll(
+    Cesium.Math.toRadians(TEST_AIRCRAFT_CONFIG.heading),
+    Cesium.Math.toRadians(TEST_AIRCRAFT_CONFIG.pitch),
+    Cesium.Math.toRadians(TEST_AIRCRAFT_CONFIG.roll)
+);
+const bonanzaOrientation = Cesium.Transforms.headingPitchRollQuaternion(bonanzaPosition, bonanzaHpr);
+
+const testBonanzaEntity = viewer.entities.add({
+    id: 'test-bonanza',
+    name: 'PropJet (PA-46 proxy)',
+    position: bonanzaPosition,
+    orientation: bonanzaOrientation,
+    show: false,  // Hidden by default
+    model: {
+        uri: 'js/models/PropJet/PropJet_NoProp.glb',
+        minimumPixelSize: 32,
+        scale: TEST_AIRCRAFT_CONFIG.scale,
+        maximumScale: 20000
+    },
+    label: {
+        text: `PropJet @ ${TEST_AIRCRAFT_CONFIG.distanceNM}nm`,
+        font: '14px sans-serif',
+        fillColor: Cesium.Color.WHITE,
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 2,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+        pixelOffset: new Cesium.Cartesian2(0, -20),
+        showBackground: true,
+        backgroundColor: Cesium.Color.BLACK.withAlpha(0.6)
+    }
+});
+
+// Export function to toggle test aircraft visibility
+export function setTestBonanzaVisible(visible) {
+    testBonanzaEntity.show = visible;
+    console.log(`Test PropJet ${visible ? 'shown' : 'hidden'}: ${TEST_AIRCRAFT_CONFIG.distanceNM}nm @ ${TEST_AIRCRAFT_CONFIG.bearing}°, ${TEST_AIRCRAFT_CONFIG.altitudeMSL}' MSL`);
+}
+
+console.log(`✅ Test PropJet initialized (hidden): ${bonanzaPos.lat.toFixed(5)}°N, ${TEST_AIRCRAFT_CONFIG.altitudeMSL}' MSL, scale ${TEST_AIRCRAFT_CONFIG.scale.toFixed(3)}x`);
+
+// ========== 3D Aircraft Models with HPB Orientation ==========
+import { loadHPBData, getOrientation, isHPBLoaded } from './hpbOrientationData.js';
+
+// Model configuration
+// headingOffset: degrees to add to heading to align model forward direction with flight path
+// pitchMultiplier/rollMultiplier: 1 or -1 to correct orientation for model axis differences
+// swapPitchRoll: true if model's pitch/roll axes are swapped relative to expected
+//
+// Cessna 172 Model License (CC-BY-4.0):
+// This work is based on "Cessna172" (https://sketchfab.com/3d-models/cessna172-d1b15841c29c43d0862667300bad55a4)
+// by KOG_THORNS (https://sketchfab.com/ioai25312) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+const MODEL_CONFIG = {
+    N97CX: {
+        modelUri: 'js/models/PropJet/PropJet_NoProp.glb',
+        scale: 0.809,  // Scaled to PA-46 Meridian wingspan (43 ft / 13.11m)
+        label: 'N97CX 3D',
+        color: '#FF6B6B',
+        // PropJet model axis corrections
+        headingOffset: 90,    // PropJet orientation correction
+        pitchMultiplier: 1,
+        rollMultiplier: -1,   // Invert roll
+        swapPitchRoll: false,
+        silhouetteColor: Cesium.Color.YELLOW  // Outline color
+    },
+    N160RA: {
+        modelUri: 'js/models/cessna172/Cessna_NoProp.glb',
+        scale: 0.717, // ← CORRECT (11.0m / 15.338m)
+        label: 'N160RA 3D',
+        color: '#4ECDC4',
+        headingOffset: -90,   // C172 model points +90° from expected
+        pitchMultiplier: 1,
+        rollMultiplier: 1,
+        swapPitchRoll: false,
+        silhouetteColor: Cesium.Color.CYAN  // Outline color
+    }
+};
+
+/**
+ * Get model configuration for an aircraft
+ */
+export function getModelConfig(aircraftId) {
+    return MODEL_CONFIG[aircraftId] || null;
+}
+
+// Store 3D model entities and their position properties
+const model3DEntities = {};
+const model3DPositions = {};  // Store position properties separately for tracking
+let model3DTickHandler = null;
+
+/**
+ * Load position data from CSV for standalone 3D model creation
+ */
+async function loadPositionFromCSV(aircraftId) {
+    const filename = `js/data/${aircraftId}_xyz.csv`;
+    try {
+        const response = await fetch(filename);
+        const data = await response.text();
+        const flightData = parseCSV(data);
+
+        if (!flightData.length) {
+            console.error(`No flight data in ${filename}`);
+            return null;
+        }
+
+        const positionProperty = new Cesium.SampledPositionProperty();
+        flightData.forEach(point => {
+            const sampleTime = Cesium.JulianDate.fromIso8601(point.time + "Z");
+            const position = Cesium.Cartesian3.fromDegrees(
+                point.lon,
+                point.lat,
+                (point.alt + GROUND_GEOID_OFFSET_FT) * 0.3048
+            );
+            positionProperty.addSample(sampleTime, position);
+        });
+
+        console.log(`✅ Loaded ${flightData.length} positions from ${filename}`);
+        return positionProperty;
+    } catch (error) {
+        console.error(`Failed to load ${filename}:`, error);
+        return null;
+    }
+}
+
+/**
+ * Create a 3D model entity that follows XYZ position with HPB orientation
+ */
+async function create3DModelEntity(aircraftId) {
+    const config = MODEL_CONFIG[aircraftId];
+    if (!config) {
+        console.error(`No model config for ${aircraftId}`);
+        return null;
+    }
+
+    // Try to get position from multiple sources (in order of preference)
+    let positionProperty = null;
+
+    // 1. Check stored positions (from previously loaded drone)
+    if (storedDronePositions[aircraftId]) {
+        positionProperty = storedDronePositions[aircraftId];
+        console.log(`Using stored position for ${aircraftId}`);
+    }
+
+    // 2. Check if base entity exists
+    if (!positionProperty) {
+        const droneEntity = viewer.entities.getById(aircraftId);
+        if (droneEntity && droneEntity.position) {
+            positionProperty = droneEntity.position;
+            console.log(`Using base entity position for ${aircraftId}`);
+        }
+    }
+
+    // 3. Load from CSV directly (independent mode)
+    if (!positionProperty) {
+        console.log(`Loading position data for ${aircraftId} from CSV...`);
+        positionProperty = await loadPositionFromCSV(aircraftId);
+    }
+
+    if (!positionProperty) {
+        console.error(`No position data available for ${aircraftId}`);
+        return null;
+    }
+
+    // Store position property for tracking
+    model3DPositions[aircraftId] = positionProperty;
+    storedDronePositions[aircraftId] = positionProperty;
+
+    // Set availability for collision aircraft (hide after impact)
+    let availability = undefined;
+    if (aircraftId === 'N160RA') {
+        const collisionEnd = Cesium.JulianDate.fromIso8601('2022-07-17T19:02:51.598Z');
+        availability = new Cesium.TimeIntervalCollection([
+            new Cesium.TimeInterval({
+                start: Cesium.JulianDate.fromIso8601('2022-07-17T18:00:00Z'),
+                stop: collisionEnd
+            })
+        ]);
+    }
+
+    // Create entity with model (no label for clean comparison)
+    const entity = viewer.entities.add({
+        id: `${aircraftId}-3d-model`,
+        name: `${aircraftId} 3D Model`,
+        position: positionProperty,
+        availability: availability,
+        show: false,  // Hidden by default
+        model: {
+            uri: config.modelUri,
+            scale: config.scale,
+            minimumPixelSize: 0,  // 0 = scale with distance (default off)
+            maximumScale: 20000,
+            silhouetteColor: config.silhouetteColor || Cesium.Color.WHITE,
+            silhouetteSize: 0  // 0 = outline off by default
+        }
+    });
+
+    model3DEntities[aircraftId] = entity;
+    console.log(`✅ Created 3D model entity for ${aircraftId}`);
+    
+    // 🔍 DEBUG: Measure model dimensions when loaded
+    // We need to wait for the model to be added to the scene and get its primitive
+    const checkModelLoaded = () => {
+        // Find the model primitive in the scene
+        const primitives = viewer.scene.primitives;
+        for (let i = 0; i < primitives.length; i++) {
+            const primitive = primitives.get(i);
+            if (primitive instanceof Cesium.Model && primitive.id === entity) {
+                // Check if model is fully ready before accessing boundingSphere
+                if (!primitive.ready) {
+                    setTimeout(checkModelLoaded, 100);
+                    return;
+                }
+                // Model is loaded
+                const boundingSphere = primitive.boundingSphere;
+                if (boundingSphere) {
+                    const radius = boundingSphere.radius;
+                    const diameter = radius * 2;
+                    
+                    console.log(`\n📐 3D MODEL DIMENSIONS for ${aircraftId}:`);
+                    console.log(`   Model URI: ${config.modelUri}`);
+                    console.log(`   Scale factor: ${config.scale}`);
+                    console.log(`   Bounding sphere radius: ${radius.toFixed(3)} meters`);
+                    console.log(`   Bounding sphere diameter: ${diameter.toFixed(3)} meters`);
+                    console.log(`   Approximate wingspan (scaled): ${diameter.toFixed(3)} meters (${(diameter * 3.28084).toFixed(2)} feet)`);
+                    
+                    // For Cessna 172, expected wingspan is 11.0 meters (36.1 feet)
+                    if (aircraftId === 'N160RA') {
+                        const expected = 11.0;
+                        const diff = diameter - expected;
+                        const diffPercent = (diff / expected) * 100;
+                        console.log(`   ✈️  Cessna 172 expected wingspan: 11.0 meters (36.1 feet)`);
+                        console.log(`   ${Math.abs(diffPercent) < 5 ? '✅' : '⚠️'}  Difference: ${diff > 0 ? '+' : ''}${diff.toFixed(3)} meters (${diffPercent > 0 ? '+' : ''}${diffPercent.toFixed(1)}%)`);
+                        if (Math.abs(diffPercent) > 5) {
+                            const correctedScale = config.scale * (expected / diameter);
+                            console.log(`   💡 Suggested scale adjustment: ${correctedScale.toFixed(3)}`);
+                        }
+                    }
+                    
+                    // For PropJet (PA-46 proxy), expected wingspan is 13.11 meters (43.0 feet)
+                    if (aircraftId === 'N97CX') {
+                        const expected = 13.11;  // PA-46 Meridian wingspan
+                        const diff = diameter - expected;
+                        const diffPercent = (diff / expected) * 100;
+                        console.log(`   ✈️  PA-46 Meridian expected wingspan: 13.11 meters (43.0 feet)`);
+                        console.log(`   ${Math.abs(diffPercent) < 5 ? '✅' : '⚠️'}  Difference: ${diff > 0 ? '+' : ''}${diff.toFixed(3)} meters (${diffPercent > 0 ? '+' : ''}${diffPercent.toFixed(1)}%)`);
+                        if (Math.abs(diffPercent) > 5) {
+                            const correctedScale = config.scale * (expected / diameter);
+                            console.log(`   💡 Suggested scale adjustment: ${correctedScale.toFixed(3)}`);
+                        }
+                    }
+                    console.log('');
+                }
+                return; // Found it, stop checking
+            }
+        }
+        
+        // Not found yet, check again in a bit
+        setTimeout(checkModelLoaded, 100);
+    };
+    
+    // Start checking after entity is added to scene
+    setTimeout(checkModelLoaded, 500);
+    
+    return entity;
+}
+
+/**
+ * Update 3D model orientations based on current playback time
+ */
+function update3DModelOrientations(clock) {
+    const currentTime = clock.currentTime;
+
+    for (const [aircraftId, entity] of Object.entries(model3DEntities)) {
+        if (!entity.show) continue;
+
+        // Skip N97CX when follow is enabled - followView.js handles it directly
+        // to ensure perfect sync between camera and model
+        if (aircraftId === 'N97CX' && isFollowEnabled()) {
+            continue;
+        }
+
+        const config = MODEL_CONFIG[aircraftId];
+        if (!config) continue;
+
+        const orientation = getOrientation(aircraftId, currentTime);
+        if (!orientation) continue;
+
+        // Get current position for orientation calculation
+        const position = entity.position?.getValue ? entity.position.getValue(currentTime) : null;
+        if (!position) continue;
+
+        // Apply model-specific corrections
+        const adjustedHeading = orientation.heading + (config.headingOffset || 0);
+
+        // Swap pitch/roll if model axes are swapped
+        let pitchValue = orientation.pitch;
+        let rollValue = orientation.roll;
+        if (config.swapPitchRoll) {
+            pitchValue = orientation.roll;
+            rollValue = orientation.pitch;
+        }
+
+        const adjustedPitch = pitchValue * (config.pitchMultiplier || 1);
+        const adjustedRoll = rollValue * (config.rollMultiplier || 1);
+
+        // Convert HPB to Cesium orientation
+        const hpr = new Cesium.HeadingPitchRoll(
+            Cesium.Math.toRadians(adjustedHeading),
+            Cesium.Math.toRadians(adjustedPitch),
+            Cesium.Math.toRadians(adjustedRoll)
+        );
+
+        entity.orientation = Cesium.Transforms.headingPitchRollQuaternion(position, hpr);
+    }
+}
+
+/**
+ * Start the orientation update tick handler
+ */
+function start3DModelUpdates() {
+    if (model3DTickHandler) return;  // Already running
+
+    model3DTickHandler = viewer.clock.onTick.addEventListener(update3DModelOrientations);
+    console.log('✅ Started 3D model orientation updates');
+}
+
+/**
+ * Stop the orientation update tick handler
+ */
+function stop3DModelUpdates() {
+    if (!model3DTickHandler) return;
+
+    viewer.clock.onTick.removeEventListener(model3DTickHandler);
+    model3DTickHandler = null;
+    console.log('⏹️ Stopped 3D model orientation updates');
+}
+
+/**
+ * Toggle 3D model visibility for an aircraft
+ */
+export async function set3DModelVisible(aircraftId, visible) {
+    let entity = model3DEntities[aircraftId];
+
+    if (visible) {
+        // Load HPB data if not already loaded
+        if (!isHPBLoaded(aircraftId)) {
+            console.log(`Loading HPB data for ${aircraftId}...`);
+            await loadHPBData(aircraftId);
+        }
+
+        // Create entity if not exists
+        if (!entity) {
+            entity = await create3DModelEntity(aircraftId);
+            if (!entity) return;
+        }
+
+        entity.show = true;
+
+        // Start tick handler if any model is visible
+        start3DModelUpdates();
+
+        console.log(`🛩️ ${aircraftId} 3D model shown`);
+    } else {
+        if (entity) {
+            entity.show = false;
+        }
+
+        // Stop tick handler if no models are visible
+        const anyVisible = Object.values(model3DEntities).some(e => e && e.show);
+        if (!anyVisible) {
+            stop3DModelUpdates();
+        }
+
+        console.log(`🛩️ ${aircraftId} 3D model hidden`);
+    }
+}
+
+/**
+ * Check if a 3D model is currently visible
+ */
+export function is3DModelVisible(aircraftId) {
+    const entity = model3DEntities[aircraftId];
+    return entity && entity.show;
+}
+
+/**
+ * Get the stored position property for a 3D model (for tracking)
+ */
+export function get3DModelPosition(aircraftId) {
+    return model3DPositions[aircraftId] || null;
+}
+
+/**
+ * Toggle outline (silhouette) for a 3D model
+ * @returns {boolean} New outline state (true = on)
+ */
+export function toggle3DModelOutline(aircraftId) {
+    const entity = model3DEntities[aircraftId];
+    if (!entity || !entity.model) return false;
+
+    const currentSize = entity.model.silhouetteSize?.getValue ?
+        entity.model.silhouetteSize.getValue() :
+        entity.model.silhouetteSize;
+    const newSize = currentSize > 0 ? 0 : 2;
+    entity.model.silhouetteSize = newSize;
+
+    console.log(`${aircraftId} outline: ${newSize > 0 ? 'ON' : 'OFF'}`);
+    return newSize > 0;
+}
+
+/**
+ * Set outline state for a 3D model
+ */
+export function set3DModelOutline(aircraftId, enabled) {
+    const entity = model3DEntities[aircraftId];
+    if (!entity || !entity.model) return;
+
+    const config = MODEL_CONFIG[aircraftId];
+    const highlightColor = config?.silhouetteColor || Cesium.Color.YELLOW;
+
+    // Silhouette not supported in this environment, use color highlight instead
+    if (enabled) {
+        // Bright highlight effect - makes model "glow" with the highlight color
+        entity.model.color = highlightColor;
+        entity.model.colorBlendMode = Cesium.ColorBlendMode.MIX;
+        entity.model.colorBlendAmount = 0.5;
+    } else {
+        // Reset to normal appearance
+        entity.model.color = Cesium.Color.WHITE;
+        entity.model.colorBlendMode = Cesium.ColorBlendMode.HIGHLIGHT;
+        entity.model.colorBlendAmount = 0.0;
+    }
+}
+
+/**
+ * Set minimumPixelSize for all 3D models (viewable at distance toggle)
+ * @param {boolean} viewable - true = always visible (48px min), false = scale with distance
+ */
+export function setAllModelsViewableAtDistance(viewable) {
+    const pixelSize = viewable ? 48 : 0;
+
+    // Update main aircraft models
+    for (const [aircraftId, entity] of Object.entries(model3DEntities)) {
+        if (entity && entity.model) {
+            entity.model.minimumPixelSize = pixelSize;
+        }
+    }
+
+    console.log(`All 3D models viewable at distance: ${viewable ? 'ON' : 'OFF'}`);
+}
 
 import { setupViewController, createChangeViewButton } from './viewController.js';
 
@@ -109,6 +612,7 @@ import { setupViewController, createChangeViewButton } from './viewController.js
 
 
 
+// 🌍 Store the Original Camera View
 const originalView = {
     destination: Cesium.Cartesian3.fromDegrees(centerLon,centerLat, centerAlt), // lon, lat, height (meters)
     orientation: {
@@ -118,8 +622,10 @@ const originalView = {
     }
 };
 
+// 🎯 Function to Reset to the Original View
 function resetToOriginalView() {
     viewer.camera.setView(originalView);
+    if (DEBUG) console.log("📍 Camera reset to original view.");
 }
 
 
@@ -151,18 +657,6 @@ export function getPiperRollAt(time) {
     return value ?? null; // Return null, not 0
 }
 
-// ----------------- Bank lookup for any aircraft with roll data -----------------
-export function getRollAt(droneID, time) {
-    if (droneID !== "N97CX") return null;
-
-    for (let i = piperRollData.length - 1; i >= 0; i--) {
-        if (Cesium.JulianDate.lessThanOrEquals(piperRollData[i].timestamp, time)) {
-            return piperRollData[i].value;
-        }
-    }
-    return null;
-}
-
 /**
  * Get all active aircraft data for CDTI display
  * @param {Cesium.JulianDate} time - Current simulation time
@@ -170,52 +664,64 @@ export function getRollAt(droneID, time) {
  */
 function getAircraftDataForCDTI(time) {
     const result = [];
-    
+
     for (const [droneID, drone] of Object.entries(activeDrones)) {
         const position = drone.position?.getValue(time);
         if (!position) continue;
-        
+
         const cartographic = Cesium.Cartographic.fromCartesian(position);
         const lat = Cesium.Math.toDegrees(cartographic.latitude);
         const lon = Cesium.Math.toDegrees(cartographic.longitude);
         const alt = cartographic.height * 3.28084;  // Convert to feet
-        
-        // Calculate heading from position delta
+
+        // Always calculate heading from position delta (for CDTI display)
         let heading = 0;
         let verticalRate = 0;
-        
+
         const prevTime = Cesium.JulianDate.addSeconds(time, -2, new Cesium.JulianDate());
         const prevPosition = drone.position?.getValue(prevTime);
-        
+
         if (prevPosition) {
             const prevCarto = Cesium.Cartographic.fromCartesian(prevPosition);
             const dLon = cartographic.longitude - prevCarto.longitude;
             const dLat = cartographic.latitude - prevCarto.latitude;
-            
+
             // Calculate heading (atan2 with lon/lat gives heading from north)
             if (Math.abs(dLon) > 1e-10 || Math.abs(dLat) > 1e-10) {
                 heading = Math.atan2(
-                    dLon * Math.cos(cartographic.latitude), 
+                    dLon * Math.cos(cartographic.latitude),
                     dLat
                 ) * 180 / Math.PI;
                 if (heading < 0) heading += 360;
             }
-            
+
             // Calculate vertical rate
             const prevAlt = prevCarto.height * 3.28084;
             verticalRate = (alt - prevAlt) * 30;  // fpm (2 sec delta)
         }
-        
+
+        // Velocity data (derived only in dist version)
+        let Vx = null;
+        let Vy = null;
+        let Vz = null;
+        let groundspeed = null;
+        let velocitySource = 'DERIVED';
+
         result.push({
             id: droneID,
             lat: lat,
             lon: lon,
             alt: alt,
             heading: heading,
-            verticalRate: verticalRate
+            verticalRate: verticalRate,
+            Vx: Vx,
+            Vy: Vy,
+            Vz: Vz,
+            groundspeed: groundspeed,
+            velocitySource: velocitySource
         });
     }
-    
+
     return result;
 }
 
@@ -296,7 +802,7 @@ export function getSmoothedRoll(time) {
 }
 
 
-// Global history time window (outside the function)
+// 📌 Global history time window (outside the function)
 let HISTORY_TIME_WINDOW = 30; // seconds
 
 
@@ -323,20 +829,19 @@ const COLOR_PALETTE = [
     Cesium.Color.CHARTREUSE
 ];
 
-// Aircraft color assignments
+// ✅ Manually assign colors for known aircraft
 const FIXED_ASSIGNMENTS = {
     "N97CX": Cesium.Color.RED,
     "N160RA": Cesium.Color.BLUE,
     "N738CY": Cesium.Color.GREEN,
     "N466MD": Cesium.Color.MAGENTA,
-    "Olsen": Cesium.Color.YELLOW,
 };
 
 
 // Stores all aircraft-to-color mappings
 const aircraftColorMap = {};
 
-// Public API
+// ✅ Public API
 export function getAircraftColor(droneID) {
     // 1. Fixed assignment
     if (FIXED_ASSIGNMENTS[droneID]) {
@@ -391,14 +896,18 @@ async function cycleImagery() {
             url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer'
         }));
         imageryButton.textContent = "Imagery - Photo";
+        console.log('Switched to ESRI World Imagery (Photo)');
     } else if (currentImageryMode === '3d') {
         try {
+            // Load Google Photorealistic 3D Tiles via Cesium Ion (legacy method)
             const resource = await Cesium.IonResource.fromAssetId(2275207);
             googleTileset = new Cesium.Cesium3DTileset({ url: resource });
             viewer.scene.primitives.add(googleTileset);
             imageryButton.textContent = "Imagery - 3D";
+            console.log('Switched to Google Photorealistic 3D Tiles');
         } catch (error) {
             console.error('Failed to load Google 3D Tiles:', error);
+            // Fall back to VFR on error
             currentImageryMode = 'vfr';
             ionLayer = viewer.imageryLayers.addImageryProvider(new Cesium.IonImageryProvider({
                 assetId: 3128787
@@ -410,10 +919,11 @@ async function cycleImagery() {
             assetId: 3128787
         }));
         imageryButton.textContent = "Imagery - VFR";
+        console.log('Switched to Cesium Ion VFR Imagery');
     }
 }
 
-// Imagery cycle button
+// ✅ Add a UI Button to Cycle Imagery
 const imageryButton = document.createElement('button');
 imageryButton.textContent = "Imagery - Photo";
 imageryButton.style.position = "absolute";
@@ -424,6 +934,7 @@ imageryButton.onclick = cycleImagery;
 document.body.appendChild(imageryButton);
 
 
+// 🎛️ Create Buttons UI
 function createButton(text, bottomOffset, onClick) {
     const button = document.createElement("button");
     button.innerText = text;
@@ -436,60 +947,19 @@ function createButton(text, bottomOffset, onClick) {
     return button;
 }
 
+// 🛠️ Add Buttons to UI
+
+
+// // createButton("Reset to North", 300, resetToNorth);
+// createButton("Reset View", 125, resetToOriginalView);
+
+
 const followBtn = createButton("Follow N97CX", 150, () => {});
+console.log("Created follow button =", followBtn);
 setupFollowView(viewer, followBtn);
 
-// Sim state - controlled by checkbox in Aircraft Panel
-let simEnabled = false;
-
-export function isSimEnabled() {
-    return simEnabled;
-}
-
-export function setSimEnabled(enabled) {
-    const wasEnabled = simEnabled;
-    simEnabled = enabled;
-
-    // If sim state changed, reload N97CX with appropriate data
-    if (wasEnabled !== enabled && loadedDrones.has("N97CX")) {
-        reloadN97CXData();
-    }
-
-    updateSimVisibility();
-}
-
-// Reload N97CX data when sim mode changes
-function reloadN97CXData() {
-    // Remove existing N97CX entities
-    viewer.entities.removeById("N97CX");
-    viewer.entities.removeById("history-N97CX");
-    viewer.entities.removeById("groundline-N97CX");
-    viewer.entities.removeById("fullpath-N97CX");
-    removeSimPath("N97CX");
-
-    delete activeDrones["N97CX"];
-    delete droneHistories["N97CX"];
-    loadedDrones.delete("N97CX");
-
-    // Clear cached groundspeed data
-    clearGSForDrone("N97CX");
-
-    // Reload with appropriate files
-    const filename = simEnabled ? "N97CX_xyz_sim.csv" : "N97CX_xyz.csv";
-    loadDrone(filename, "N97CX");
-
-    // Reload roll data
-    loadPiperRollData();
-}
-
-// Update visibility of simulated path elements
-function updateSimVisibility() {
-    viewer.entities.values.forEach(entity => {
-        if (entity.id && entity.id.startsWith("sim-dot-N97CX-")) {
-            entity.show = simEnabled;
-        }
-    });
-}
+// ✅ Now attach actual follow behavior
+setupFollowView(viewer, followBtn);
 
 
 
@@ -502,10 +972,10 @@ setupATCTView(viewer, ATCTLat, ATCTLon, ATCTHeight);
 let activeDrones = {};
 
 // Default Drones
-const defaultDrones = ["N97CX", "N160RA","XSM55","N466MD","N738CY"];  //,"N90MX","N786TX"
+const defaultDrones = ["N97CX", "N160RA","XSM55","N466MD","N738CY"];
 const loadedDrones = new Set();
 
-// Fetch List of Drone Files (Simulated for now)
+// List of drone files (distribution version - no ghost/sim/olsen/N2406P)
 const availableFiles = [
     "N97CX_xyz.csv",
     "N160RA_xyz.csv",
@@ -514,18 +984,26 @@ const availableFiles = [
     "XSM55_xyz.csv",
     "N466MD_xyz.csv",
     "N738CY_xyz.csv",
-    "Olsen_xyz.csv",
 ];
-
 
 const availableDrones = availableFiles.map(f => f.split("_")[0]);
 
 import { parseCSV } from './csvParser.js';
-import { setupLabelMode, buildLabelText, loadGSForDrone, clearGSForDrone } from './labelMode.js';
+import { setupLabelMode, buildLabelText, loadGSForDrone } from './labelMode.js';
 
-let allTimes = [];
+// Global variables
+let allTimes = [];  // ✅ Ensure this is defined globally
 const droneHistories = {}; 
 
+
+// ===========================================================
+//  REPLACEMENT CODE FOR drones.js
+//  Replace your existing loadDrone function and setupAircraftPanelUI call
+// ===========================================================
+
+// ===========================================================
+//  LOAD DRONE FUNCTION (replace existing)
+// ===========================================================
 
 function loadDrone(filename, droneID) {
     if (loadedDrones.has(droneID)) return;
@@ -538,25 +1016,27 @@ function loadDrone(filename, droneID) {
 
             const flightData = parseCSV(data);
 
+            // Store position property persistently (for 3D models and tracking)
+            storedDronePositions[droneID] = dronePosition;
+
             // Store N97CX position property for TCAS alignment
             if (droneID === "N97CX") {
                 n97cxPositionProperty = dronePosition;
             }
             
             if (!flightData.length) {
-                console.error(`No flight data for ${droneID}`);
+                console.error(`❌ No flight data for ${droneID}! Check CSV format.`);
                 return;
             }
             
             // ========== Store full path positions for "All" display ==========
-            const fullPathPositions = flightData.map(point => ({
-                time: Cesium.JulianDate.fromIso8601(point.time + "Z"),
-                position: Cesium.Cartesian3.fromDegrees(
+            const fullPathPositions = flightData.map(point => 
+                Cesium.Cartesian3.fromDegrees(
                     point.lon,
                     point.lat,
                     (point.alt + GROUND_GEOID_OFFSET_FT) * 0.3048
                 )
-            }));
+            );
             
             // ========== Prepare attitude samples ==========
             const attitudeSamples = new Map();
@@ -578,15 +1058,39 @@ function loadDrone(filename, droneID) {
                 });
             });
             
-            // Create Cesium Entity
+            console.log(`${droneID} first time: ${flightData[0]?.time}`);
+            console.log(`${droneID} last time: ${flightData[flightData.length-1]?.time}`);
+            console.log(`${droneID} total samples: ${flightData.length}`);
+            
+            // ========== Create Cesium Entity ==========
             const color = getAircraftColor(droneID) || Cesium.Color.YELLOW;
+            
+            // Set availability for collision aircraft (hide after impact)
+            let availability = undefined;
+            if (droneID === 'N160RA') {
+                // Hide N160RA 0.2 seconds after collision (19:02:51.398 + 0.2 = 19:02:51.598)
+                const collisionEnd = Cesium.JulianDate.fromIso8601('2022-07-17T19:02:51.598Z');
+                availability = new Cesium.TimeIntervalCollection([
+                    new Cesium.TimeInterval({
+                        start: Cesium.JulianDate.fromIso8601('2022-07-17T18:00:00Z'),
+                        stop: collisionEnd
+                    })
+                ]);
+            }
 
-            // For N97CX with sim enabled, don't show path trail (dots show sim instead)
-            const showPath = !(droneID === "N97CX" && simEnabled);
+            // Configure path - for N160RA, no lead time (don't show future path)
+            const pathConfig = {
+                resolution: 1,
+                material: color,
+                width: 2,
+                leadTime: 0,  // Don't show future positions
+                trailTime: 60  // Show 60 seconds of trail
+            };
 
             const drone = viewer.entities.add({
                 id: droneID,
                 position: dronePosition,
+                availability: availability,
                 point: { pixelSize: 10, color: color },
                 label: {
                     text: droneID,
@@ -595,44 +1099,39 @@ function loadDrone(filename, droneID) {
                     horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
                     verticalOrigin: Cesium.VerticalOrigin.BOTTOM
                 },
-                path: showPath ? { resolution: 1, material: color, width: 2 } : undefined
+                path: pathConfig
             });
-            
+
             activeDrones[droneID] = drone;
             
             // ========== Attach data for later use ==========
             drone._attitudeSamples = attitudeSamples;
             drone._fullPathPositions = fullPathPositions;  // For "All" checkbox
             
-            // Add visuals
-            updateDroneLabel(droneID, dronePosition);
-            // Load groundspeed data - use sim file for N97CX when sim enabled
-            if (droneID === "N97CX" && simEnabled) {
-                loadGSForDrone(droneID, "js/data/N97CX_gs_sim.csv");
-            } else {
-                loadGSForDrone(droneID);
-            }
-            // Don't show history trail for N97CX when sim enabled (dots show sim path)
-            if (!(droneID === "N97CX" && simEnabled)) {
-                manageDroneHistory(droneID, dronePosition);
-            }
-            drawGroundLine(droneID, dronePosition);
-
-            // Create simulated path for N97CX (dashed line after collision)
             if (droneID === "N97CX") {
-                createSimPath(droneID, fullPathPositions);
+                console.log("✅ Loaded attitude samples for N97CX:", attitudeSamples.size);
+                const firstSample = [...attitudeSamples.keys()][0];
+                console.log("📅 First attitude timestamp:", firstSample.toString());
             }
+            
+            // ========== Add visuals ==========
+            updateDroneLabel(droneID, dronePosition);
+            loadGSForDrone(droneID);  // Load groundspeed data for labels
+            manageDroneHistory(droneID, dronePosition);
+            drawGroundLine(droneID, dronePosition);
             
             // ========== Clock setup ==========
             if (!initialZoomDone && loadedDrones.size >= defaultDrones.length) {
                 setCesiumClock();
             }
             
+            // ========== Start follow camera if enabled ==========
             if (droneID === "N97CX" && isFollowEnabled()) {
                 updateFollowCamera(viewer.clock, "N97CX");
+                console.log("📸 Follow camera activated for N97CX");
             }
         })
-        .catch(error => console.error(`Error loading drone data for ${droneID}:`, error));
+        .catch(error => console.error(`❌ Error loading drone data for ${droneID}:`, error));
 }
 
 
@@ -669,32 +1168,35 @@ setupAircraftPanelUI(
 
             const color = getAircraftColor(droneID) || Cesium.Color.YELLOW;
 
-            // For N97CX, only show pre-collision path (solid line)
-            // Sim path (dashed) is shown separately when Sim is enabled
-            let positions;
-            if (droneID === "N97CX") {
-                positions = drone._fullPathPositions.filter(p =>
-                    Cesium.JulianDate.lessThanOrEquals(p.time, SIM_SPLIT_TIME)
-                ).map(p => p.position);
-            } else {
-                // Other aircraft: extract positions from the time/position objects
-                positions = drone._fullPathPositions.map(p => p.position);
+            // Set availability for N160RA (hide after collision + 0.2s)
+            let availability = undefined;
+            if (droneID === 'N160RA') {
+                const collisionEnd = Cesium.JulianDate.fromIso8601('2022-07-17T19:02:51.598Z');
+                availability = new Cesium.TimeIntervalCollection([
+                    new Cesium.TimeInterval({
+                        start: Cesium.JulianDate.fromIso8601('2022-07-17T18:00:00Z'),
+                        stop: collisionEnd
+                    })
+                ]);
             }
 
             viewer.entities.add({
                 id: `fullpath-${droneID}`,
+                availability: availability,
                 polyline: {
-                    positions: positions,
+                    positions: drone._fullPathPositions,
                     width: 3,
                     material: color.withAlpha(0.8),
                     clampToGround: false
                 }
             });
 
+            console.log(`📍 Showing full path for ${droneID} (${drone._fullPathPositions.length} points)`);
         },
-
+        
         hideFullPath: (droneID) => {
             viewer.entities.removeById(`fullpath-${droneID}`);
+            console.log(`📍 Hiding full path for ${droneID}`);
         },
         
         showHistoricalApproaches: FEATURES.historicalApproaches,
@@ -767,26 +1269,31 @@ setupAircraftPanelUI(
             "20220514_182325_G135_arr_12R.csv",
             "20220604_193544_G137_arr_12R.csv",
             "20220705_191226_G139_arr_12R.csv",
-            "20220717_185827_G141_arr_30R.csv"
+            "20220717_185827_G141_arr_30L.csv"
         ]    }
 );
 
 
+setupCDTI(viewer, getAircraftDataForCDTI);
+
+
+
+// Initialize label mode system (Minimal/Standard/Extended cycling)
 setupLabelMode(viewer, defaultDrones);
-loadPiperRollData();  // Load bank angle data for N97CX
 
 
+// 📌 Function to Round Altitude to the Nearest 25 Feet
 function roundAltitude(feet) {
-    return Math.round(feet / 25) * 25;
+    return Math.round(feet / 25) * 25; // Round to nearest 25 feet
 }
 
+
+// ✅ Load Piper Roll Data with JulianDate conversion
 let piperRollData = [];
 
 async function loadPiperRollData() {
     try {
-        // Load N97CX roll data - use sim file when sim mode enabled
-        const rollFile = simEnabled ? 'js/data/N97CX_roll_sim.csv' : 'js/data/N97CX_roll.csv';
-        const response = await fetch(rollFile);
+        const response = await fetch('js/data/N97CX_roll.csv'); // Adjust path as needed
         const csvText = await response.text();
         const rows = csvText.split("\n").slice(1); // Skip the header
 
@@ -794,16 +1301,19 @@ async function loadPiperRollData() {
             const [timestamp, value] = row.split(",");
 
             return {
-                timestamp: Cesium.JulianDate.fromIso8601(timestamp.trim() + "Z"),
+                timestamp: Cesium.JulianDate.fromIso8601(timestamp.trim() + "Z"), // Convert to Cesium.JulianDate
                 value: parseFloat(value)
             };
         }).filter(entry => !isNaN(entry.value));
 
+        console.log("✅ Piper Roll Data Loaded (Julian Dates):", piperRollData);
     } catch (error) {
-        console.error("Error loading Roll Data:", error);
+        console.error("❌ Error loading Piper Roll Data:", error);
     }
 }
 
+
+// 🛠️ Update drone label based on current label mode
 function updateDroneLabel(droneID, dronePosition) {
     viewer.entities.getById(droneID).label.text = new Cesium.CallbackProperty((time, result) => {
         const position = dronePosition.getValue(time);
@@ -815,7 +1325,7 @@ function updateDroneLabel(droneID, dronePosition) {
         const cartographic = Cesium.Cartographic.fromCartesian(position);
         const altitudeFeet = roundAltitude(cartographic.height * 3.28084);
 
-        // Get bank angle for N97CX
+        // Get bank angle for N97CX (from existing piperRollData)
         let bankAngle = null;
         if (droneID === "N97CX") {
             for (let i = piperRollData.length - 1; i >= 0; i--) {
@@ -832,8 +1342,10 @@ function updateDroneLabel(droneID, dronePosition) {
 }
 
 
+// 🕒 Store last recorded time per drone
 let lastDroneTime = {};
 
+// 📊 History Window Control (TOP LEFT - separate container)
 const historyContainer = document.createElement("div");
 historyContainer.style.position = "absolute";
 historyContainer.style.top = "10px";
@@ -866,6 +1378,7 @@ historyInput.style.width = "50px";
 historyInput.style.textAlign = "center";
 historyContainer.appendChild(historyInput);
 
+// ✅ Add listeners RIGHT HERE, after elements exist
 historyInput.addEventListener("input", (event) => {
     const newValue = parseInt(event.target.value, 10);
     if (!isNaN(newValue) && newValue >= 5 && newValue <= 300) {
@@ -882,15 +1395,32 @@ historyToggle.addEventListener("change", (event) => {
 });
 
 
+// 📌 Function to Manage Drone History (Updates & Clears as Needed)
 function manageDroneHistory(droneID, dronePosition) {
+    // ✅ Ensure history array is initialized
     if (!droneHistories[droneID]) {
         droneHistories[droneID] = [];
     }
 
+    // Remove old history entity
     viewer.entities.removeById(`history-${droneID}`);
 
+    // Set availability for N160RA (hide after collision + 0.2s)
+    let availability = undefined;
+    if (droneID === 'N160RA') {
+        const collisionEnd = Cesium.JulianDate.fromIso8601('2022-07-17T19:02:51.598Z');
+        availability = new Cesium.TimeIntervalCollection([
+            new Cesium.TimeInterval({
+                start: Cesium.JulianDate.fromIso8601('2022-07-17T18:00:00Z'),
+                stop: collisionEnd
+            })
+        ]);
+    }
+
+    // 🖊️ History Polyline
     viewer.entities.add({
         id: `history-${droneID}`,
+        availability: availability,
         polyline: {
             positions: new Cesium.CallbackProperty((time, result) => {
                 // Check if history is enabled
@@ -909,6 +1439,7 @@ function manageDroneHistory(droneID, dronePosition) {
                 }
                 lastDroneTime[droneID] = currentTime.clone();
 
+                // ✅ Only add if this timestamp is newer than the last entry
                 const history = droneHistories[droneID];
                 const lastEntry = history[history.length - 1];
                 
@@ -924,7 +1455,8 @@ function manageDroneHistory(droneID, dronePosition) {
                     Cesium.JulianDate.secondsDifference(currentTime, entry.time) <= HISTORY_TIME_WINDOW
                 );
 
-                droneHistories[droneID].sort((a, b) =>
+                // ✅ Sort by time to ensure correct order
+                droneHistories[droneID].sort((a, b) => 
                     Cesium.JulianDate.compare(a.time, b.time)
                 );
 
@@ -936,53 +1468,6 @@ function manageDroneHistory(droneID, dronePosition) {
     });
 }
 
-// Create dotted path for simulated flight (N97CX after collision)
-const SIM_SPLIT_TIME = Cesium.JulianDate.fromIso8601("2022-07-17T19:02:51.5Z");
-const SIM_DOT_SPACING = 2;  // Show every Nth position as a dot
-
-function createSimPath(droneID, fullPathPositions) {
-    // Remove existing sim path dots
-    removeSimPath(droneID);
-
-    // Filter positions after split time
-    const simPositions = fullPathPositions.filter(p =>
-        Cesium.JulianDate.greaterThan(p.time, SIM_SPLIT_TIME)
-    );
-
-    if (simPositions.length === 0) return;
-
-    const color = getAircraftColor(droneID).withAlpha(0.9);
-
-    // Create point entities at intervals for dotted appearance
-    // Show based on current sim state (not always hidden)
-    simPositions.forEach((p, i) => {
-        if (i % SIM_DOT_SPACING === 0) {
-            viewer.entities.add({
-                id: `sim-dot-${droneID}-${i}`,
-                position: p.position,
-                point: {
-                    pixelSize: 4,
-                    color: color,
-                    outlineColor: Cesium.Color.WHITE,
-                    outlineWidth: 1
-                },
-                show: simEnabled  // Show based on current sim state
-            });
-        }
-    });
-}
-
-function removeSimPath(droneID) {
-    // Remove all sim dot entities for this drone
-    const toRemove = [];
-    viewer.entities.values.forEach(entity => {
-        if (entity.id && entity.id.startsWith(`sim-dot-${droneID}-`)) {
-            toRemove.push(entity);
-        }
-    });
-    toRemove.forEach(entity => viewer.entities.remove(entity));
-}
-
 
 
 //  Ground Line
@@ -991,6 +1476,18 @@ function drawGroundLine(droneID, dronePosition) {
 
     // Remove old entity
     viewer.entities.removeById(groundLineID);
+
+    // Set availability for N160RA (hide after collision + 0.2s)
+    let availability = undefined;
+    if (droneID === 'N160RA') {
+        const collisionEnd = Cesium.JulianDate.fromIso8601('2022-07-17T19:02:51.598Z');
+        availability = new Cesium.TimeIntervalCollection([
+            new Cesium.TimeInterval({
+                start: Cesium.JulianDate.fromIso8601('2022-07-17T18:00:00Z'),
+                stop: collisionEnd
+            })
+        ]);
+    }
 
     const dynamicPositions = new Cesium.CallbackProperty((time, result) => {
         const droneCartesian = dronePosition.getValue(time);
@@ -1003,6 +1500,7 @@ function drawGroundLine(droneID, dronePosition) {
         const lon = Cesium.Math.toDegrees(carto.longitude);
         const lat = Cesium.Math.toDegrees(carto.latitude);
 
+        // 🔥 Get the terrain elevation at that point
         const groundHeight =
             viewer.scene.globe.getHeight(
                 Cesium.Cartographic.fromDegrees(lon, lat)
@@ -1019,6 +1517,7 @@ function drawGroundLine(droneID, dronePosition) {
 
     viewer.entities.add({
         id: groundLineID,
+        availability: availability,
         polyline: {
             positions: dynamicPositions,
             material: getAircraftColor(droneID).withAlpha(0.7),
@@ -1037,6 +1536,8 @@ import {
 } from "./reportingPoints.js";
 
 
+// Audio
+// 🎵 Audio Variables
 let audioContext;
 let audioBuffer;
 let audioSource;
@@ -1047,6 +1548,7 @@ let userInteracted = false; // Tracks if user clicked Play
 let isMuted = false;
 let currentVolume = 0.7;  // Default volume (0-1)
 
+// 🎚️ Create Audio Control Panel
 const audioControlPanel = document.createElement("div");
 audioControlPanel.style.cssText = `
     position: absolute;
@@ -1142,6 +1644,7 @@ volumeSlider.addEventListener("input", () => {
 
 
 
+// 🔄 Load the audio file into an AudioBuffer
 async function loadAudio(url) {
     audioPlayBtn.innerText = "⏳";
     audioPlayBtn.disabled = true;
@@ -1166,13 +1669,15 @@ async function loadAudio(url) {
         audioPlayBtn.innerText = "▶";
         audioPlayBtn.disabled = false;
         audioPlayBtn.style.opacity = "1.0";
+        if (DEBUG) console.log("✅ Audio file loaded!");
     } catch (err) {
         audioPlayBtn.innerText = "⚠";
         audioPlayBtn.title = "Audio Failed";
-        console.error("Audio load error:", err);
+        console.error("❌ Audio load error:", err);
     }
 }
 
+// 🎵 Play audio from a specific simulation time
 function playAudioFrom(simulationTime) {
     if (!audioBuffer || !audioContext || !userInteracted) return; // Prevent autoplay issue
 
@@ -1180,17 +1685,22 @@ function playAudioFrom(simulationTime) {
 
     const elapsedAudioTime = simulationTime - audioStartTime;
     if (elapsedAudioTime < 0 || elapsedAudioTime > audioBuffer.duration) {
+        console.warn("🚨 Audio is out of bounds!");
         return;
     }
 
+    // Create and start a new audio source at the correct offset
     audioSource = audioContext.createBufferSource();
     audioSource.buffer = audioBuffer;
+    // Route through gain node for volume control
     audioSource.connect(audioGainNode);
     audioSource.start(0, elapsedAudioTime);
 
     isPlaying = true;
+    if (DEBUG) console.log(`🎵 Audio started at ${elapsedAudioTime} seconds.`);
 }
 
+// ⏹️ Stop audio playback
 function stopAudio() {
     if (audioSource) {
         audioSource.stop();
@@ -1200,6 +1710,7 @@ function stopAudio() {
     isPlaying = false;
 }
 
+// 🎚️ Sync audio with Cesium clock
 function syncAudioToClock() {
     if (!userInteracted) return; // Prevent autoplay error before user interacts
 
@@ -1215,6 +1726,7 @@ function syncAudioToClock() {
     }
 }
 
+// ✅ Ensure user interaction before starting audio
 function enableAudioPlayback() {
     if (!userInteracted) {
         userInteracted = true;
@@ -1239,13 +1751,26 @@ function enableAudioPlayback() {
         audioPlayBtn.title = "Audio Enabled";
         audioPlayBtn.style.background = "#2a5";
         audioPlayBtn.disabled = true;
+
+        if (DEBUG) console.log("🔊 User clicked Play Audio, playback enabled.");
     }
 }
 
+// 🖱️ Listen for Play Button Click
 audioPlayBtn.addEventListener("click", enableAudioPlayback);
+
+// 🎯 Sync audio on every tick (but only after user interacts)
 viewer.clock.onTick.addEventListener(syncAudioToClock);
 
-loadAudio("js/static/LC1_1845-1912.mp3");
+
+loadAudio("js/static/LC1_1845-1912.mp3").then(() => {
+    if (DEBUG) console.log("🔊 Audio ready to sync with Cesium clock!");
+});
+
+// // 🎵 Load audio file (but won't play until user clicks button)
+// loadAudio("js/static/LC1_1845-1912.wav").then(() => {
+//     if (DEBUG) console.log("🔊 Audio ready to sync with Cesium clock!");
+// });
 
 
 function viewFromPoleTop() {
@@ -1258,6 +1783,7 @@ function viewFromPoleTop() {
         }
     });
 
+    if (DEBUG) console.log("📍 Camera moved to top of the reference pole.");
 }
 
 
@@ -1275,9 +1801,12 @@ function setDefaultCamera() {
         }
     });
 
+    if (DEBUG) console.log(`✅ Camera adjusted to view all drones: Center (${centerLon}, ${centerLat}), Altitude: ${centerAlt}`);
 }
 
-let initialZoomDone = false;
+
+let initialZoomDone = false; // Prevent re-zooming
+// ✅ Define Time Bounds Globally
 const startTime = Cesium.JulianDate.fromIso8601("2022-07-17T18:45:00Z");
 const endTime = Cesium.JulianDate.fromIso8601("2022-07-17T19:10:00Z");
 
@@ -1311,12 +1840,8 @@ function setCesiumClock() {
         viewer.timeline.zoomTo(startTime, endTime);
     }
 
-    // FOLLOW CAMERA HOOK
-    viewer.clock.onTick.addEventListener((clock) => {
-        if (isFollowEnabled()) {
-            updateFollowCamera(clock, "N97CX");
-        }
-    });
+    // NOTE: Follow camera hook removed - followView.js handles this via onFollowTick
+    // Having it here caused updateFollowCamera to be called twice per frame, breaking smoothing
 
     // Keep time inside [start, stop] but DO NOT disable animation
     viewer.clock.onTick.addEventListener((clock) => {
@@ -1370,17 +1895,60 @@ viewer.clock.onTick.addEventListener(clampPlaybackSpeed);
 
 
 
-const MAGNET_THRESHOLD = 0.5;
+// 🎚️ Define Magnet Threshold (How Close to Snap to 1x)
+const MAGNET_THRESHOLD = 0.5; // Snaps when speed is between 0.7x and 1.3x
 
+// 🔄 Monitor Playback Speed and Snap to 1x if Close
 function checkPlaybackSpeed() {
     const currentSpeed = viewer.clock.multiplier;
 
+    // ✅ Snap to 1x if within threshold
     if (currentSpeed > 1 - MAGNET_THRESHOLD && currentSpeed < 1 + MAGNET_THRESHOLD) {
         viewer.clock.multiplier = 1;
+        if (DEBUG) console.log("🔄 Snapped playback speed to 1x.");
     }
 }
 
+// 🎯 Monitor Playback Speed During Scrubbing and Animation
 viewer.clock.onTick.addEventListener(checkPlaybackSpeed);
+
+
+// // Build Drone Toggle UI - pass feature flag for ghost paths
+// setupAircraftPanelUI(
+//     viewer,
+//     availableDrones,
+//     defaultDrones,
+//     (droneID) => loadDrone(`${droneID}_xyz.csv`, droneID),   // load
+//     (droneID) => {                                            // unload
+//         viewer.entities.removeById(droneID);
+//         viewer.entities.removeById(`history-${droneID}`);
+//         viewer.entities.removeById(`groundline-${droneID}`);
+//         viewer.entities.removeById(`fullpath-${droneID}`);   // Also remove full path
+//         delete activeDrones[droneID];
+//         delete droneHistories[droneID];
+//         loadedDrones.delete(droneID);
+//     },
+//     { 
+//         showGhostPaths: FEATURES.ghostPaths,
+//         showFullPath: (droneID) => {
+//             // Get the drone's full position data and create polyline
+//             const drone = activeDrones[droneID];
+//             if (!drone || !drone.positions) return;
+            
+//             viewer.entities.add({
+//                 id: `fullpath-${droneID}`,
+//                 polyline: {
+//                     positions: drone.positions,  // All Cartesian3 positions
+//                     width: 2,
+//                     material: Cesium.Color.YELLOW.withAlpha(0.7)
+//                 }
+//             });
+//         },
+//         hideFullPath: (droneID) => {
+//             viewer.entities.removeById(`fullpath-${droneID}`);
+//         }
+//     }
+// );
 
 
 if (FEATURES.reportingPoints) {

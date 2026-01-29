@@ -249,6 +249,7 @@ export function showRunwayCenterlines() {
         centerlineBtn.style.color = "white";
     }
 
+    console.log("✅ Runway extended centerlines displayed");
 }
 
 export function hideRunwayCenterlines() {
@@ -267,6 +268,7 @@ export function hideRunwayCenterlines() {
         centerlineBtn.style.color = "";
     }
 
+    console.log("❌ Runway extended centerlines hidden");
 }
 
 export function isCenterlinesVisible() {

@@ -55,7 +55,7 @@ const FIXED_PITCH_DEG = 0;  // Level horizon for cockpit POV
 
 // Tail view: camera behind aircraft, looking at tail (medium chase)
 const TAIL_VIEW_BACK = 25.0;   // Meters behind aircraft
-const TAIL_VIEW_UP = 3.0;    // Meters above aircraft 
+const TAIL_VIEW_UP = -3.0;    // Meters above aircraft 
 const TAIL_VIEW_LEFT = 0.0;   // Centered behind
 
 // Store original FOV to restore later

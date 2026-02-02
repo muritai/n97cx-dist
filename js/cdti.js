@@ -41,21 +41,105 @@ const ALTITUDE_FILTERS = {
     XTD:    { below: -9000, above: 9000, label: 'XTD' },    // ±9,000 ft
 };
 
+// ===========================================================
+//           GDL 88 SENSITIVITY LEVELS (Table 4-2)
+// ===========================================================
+// Altitude-dependent traffic alert sensitivity per GDL 88 Rev E
+// Note: Levels 2-3 are TCAS-specific, GDL 88 CSA starts at Level 4
+// Uses HAT (Height Above Terrain/Radio Altitude) when available,
+// otherwise falls back to GPS phase or ownship MSL altitude
+const GDL88_SENSITIVITY_LEVELS = [
+    { level: 4, minAlt: 0,     maxAlt: 1000,  tau: 20, vertThreshold: 850,  protectedVol: 0.20, phase: 'Approach' },
+    { level: 5, minAlt: 1000,  maxAlt: 2350,  tau: 25, vertThreshold: 850,  protectedVol: 0.20, phase: 'Terminal' },
+    { level: 6, minAlt: 2350,  maxAlt: 5000,  tau: 30, vertThreshold: 850,  protectedVol: 0.35, phase: 'Enroute <=5k' },
+    { level: 7, minAlt: 5000,  maxAlt: 10000, tau: 40, vertThreshold: 850,  protectedVol: 0.55, phase: 'Enroute 5-10k' },
+    { level: 8, minAlt: 10000, maxAlt: 20000, tau: 45, vertThreshold: 850,  protectedVol: 0.80, phase: 'Enroute 10-20k' },
+    { level: 9, minAlt: 20000, maxAlt: 42000, tau: 48, vertThreshold: 850,  protectedVol: 1.10, phase: 'Enroute 20-42k' },
+];
+
+/**
+ * Get GDL 88 sensitivity level based on ownship altitude
+ * Per GDL 88 Rev E Table 4-2, CSA algorithm uses levels 4-9
+ *
+ * Priority order:
+ * 1. HAT available → use HAT for SL4-5 selection, MSL for SL6-9
+ * 2. HAT unavailable, GPS phase available → APPROACH=SL4, TERMINAL=SL5
+ * 3. HAT unavailable, no GPS phase → use MSL altitude for SL6-9
+ *
+ * @param {number} mslAltitudeFt - Ownship MSL altitude in feet
+ * @param {number|null} hatFt - Height Above Terrain in feet (null if unavailable)
+ * @returns {Object} Sensitivity level parameters with source info
+ */
+function getSensitivityLevel(mslAltitudeFt, hatFt = null) {
+    // GDL 88 CSA algorithm uses levels 4-9 (levels 2-3 are TCAS-specific)
+    let altitudeForLookup;
+    let source;
+
+    if (hatFt !== null && CDTI_CONFIG.hatAvailable) {
+        // HAT available - use HAT for low altitude levels (SL4-5)
+        // Above 2350 ft HAT, use MSL for SL6-9
+        if (hatFt < 2350) {
+            altitudeForLookup = hatFt;
+            source = 'HAT';
+        } else {
+            altitudeForLookup = mslAltitudeFt;
+            source = 'MSL';
+        }
+    } else {
+        // HAT unavailable - check GPS phase first
+        if (CDTI_CONFIG.gpsPhase === 'APPROACH') {
+            // Approach phase → SL4 (most restrictive)
+            const sl4 = GDL88_SENSITIVITY_LEVELS.find(l => l.level === 4);
+            return { ...sl4, source: 'GPS_APPROACH' };
+        } else if (CDTI_CONFIG.gpsPhase === 'TERMINAL') {
+            // Terminal phase → SL5
+            const sl5 = GDL88_SENSITIVITY_LEVELS.find(l => l.level === 5);
+            return { ...sl5, source: 'GPS_TERMINAL' };
+        } else {
+            // No GPS phase - use MSL altitude for SL6-9
+            // Since we can't confirm low altitude, minimum is SL6
+            altitudeForLookup = Math.max(mslAltitudeFt, 2350);  // Floor at SL6
+            source = 'MSL_FALLBACK';
+        }
+    }
+
+    // Look up sensitivity level based on altitude
+    for (const level of GDL88_SENSITIVITY_LEVELS) {
+        if (altitudeForLookup >= level.minAlt && altitudeForLookup < level.maxAlt) {
+            return { ...level, source };
+        }
+    }
+
+    // Default to highest level (SL9) if above range
+    const highest = GDL88_SENSITIVITY_LEVELS[GDL88_SENSITIVITY_LEVELS.length - 1];
+    return { ...highest, source };
+}
+
 // Configuration
 const CDTI_CONFIG = {
-    rangeRings: [2, 5],            // nm - configurable range rings
-    maxRange: 5,                   // nm - display radius
+    rangeRings: [2],               // nm - configurable range rings (GTN style)
+    maxRange: 2,                   // nm - display radius
     updateInterval: 100,           // ms - how often to redraw
     ownshipID: 'N97CX',
     compassTickInterval: 10,       // degrees between tick marks
     altitudeFilter: 'NORMAL',      // Current altitude filter mode
     verticalRateThreshold: 500,    // fpm - threshold for trend arrows
     showUTCClock: true,            // Toggle UTC clock display for screen capture
-    // TAU (time-based) alerting thresholds
+    // TAU (time-based) alerting thresholds (defaults, overridden by GDL88 sensitivity)
     tauEnabled: true,              // Enable TAU-based TA alerting
-    tauThreshold: 15,              // seconds - GDL-88 uses 20s, Sandel uses 15-30s
-    tauDistanceThreshold: 0.20,    // nm - TA distance threshold for TAU calculation (Sandel value; no value available for GDL)
-    tauAltitudeThreshold: 800,     // ft - must be within this altitude for TAU alert
+    tauThreshold: 20,              // seconds - default, overridden by sensitivity level
+    tauDistanceThreshold: 0.20,    // nm - default, overridden by sensitivity level
+    tauAltitudeThreshold: 850,     // ft - default, overridden by sensitivity level
+    // GDL 88 altitude-based sensitivity
+    useGDL88Sensitivity: true,     // Use altitude-based sensitivity levels from Table 4-2
+    hatAvailable: true,            // Whether HAT (Height Above Terrain) is available
+    gpsPhase: 'NONE',              // GPS flight phase: 'APPROACH', 'TERMINAL', 'NONE'
+    kvgtElevation: 2113.5,         // KVGT airport ellipsoidal elevation for HAT calculation (ft MSL)
+    // Motion vector configuration (G500 Table 4-21)
+    motionVectorMode: 'ABSOLUTE',  // 'ABSOLUTE', 'RELATIVE', or 'OFF'
+    motionVectorDuration: 60,      // seconds (30, 60, 120, 300)
+    // Directional arrow configuration (G500 Table 4-21)
+    showDirectionalArrows: true,   // Show heading arrows inside traffic symbols
 };
 
 // KVGT Runway definitions (threshold coords from FAA data - converted from DMS)
@@ -86,11 +170,27 @@ let cdtiCanvas = null;
 let cdtiCtx = null;
 let cdtiOverlay = null;
 let cdtiButton = null;
+let exportButton = null;
 let cdtiLegend = null;
 let isVisible = false;
 let isLegendVisible = false;
 let updateTimer = null;
 let getAircraftDataFn = null;  // Function to get all aircraft positions
+
+// Threat persistence tracking (sequential verification per DO-317B)
+// Tracks consecutive seconds each target has met TA criteria
+const threatPersistence = {
+    history: {},        // { targetId: { level: 'TA', count: 2, lastTime: julianDate } }
+    threshold: 2,       // Seconds required before upgrading to TA (0 = disabled)
+    maxAge: 5000,       // ms - remove stale entries older than this
+};
+
+// Altitude smoothing (3-point moving average to reduce ADS-B jitter)
+const altitudeSmoothing = {
+    history: {},        // { targetId: [alt1, alt2, alt3] } - recent altitude readings
+    windowSize: 1,      // Number of samples to average
+    maxAge: 5000,       // ms - remove stale entries older than this
+};
 
 /**
  * Calculate closure rate between two aircraft (horizontal and vertical)
@@ -204,14 +304,31 @@ function calculateClosure(ownship, target, distanceNm, relPos, relAltFt) {
 /**
  * Classify traffic threat level based on RTCA/TCAS standards
  * Now includes TAU-based alerting with modified tau (horizontal + vertical)
+ * Uses GDL 88 Table 4-2 altitude-dependent sensitivity levels when enabled
  *
  * @param {number} distanceNm - Horizontal distance in nautical miles
  * @param {number} relAltFt - Relative altitude in feet (target - ownship)
  * @param {Object} closureInfo - Closure info from calculateClosure()
+ * @param {number} ownshipAlt - Ownship altitude in feet MSL (for sensitivity level)
  * @returns {Object} Threat classification with trigger details
  */
-function classifyThreat(distanceNm, relAltFt, closureInfo = null) {
+function classifyThreat(distanceNm, relAltFt, closureInfo = null, ownshipAlt = null) {
     const absRelAlt = Math.abs(relAltFt);
+
+    // Get sensitivity level based on ownship altitude (GDL 88 Table 4-2)
+    let sensitivity;
+    if (CDTI_CONFIG.useGDL88Sensitivity && ownshipAlt !== null) {
+        const hat = ownshipAlt - CDTI_CONFIG.kvgtElevation;
+        sensitivity = getSensitivityLevel(ownshipAlt, hat);
+    } else {
+        // Fallback to fixed defaults (SL7 equivalent - 5000-10000ft MSL)
+        sensitivity = { level: 7, tau: 40, vertThreshold: 850, protectedVol: 0.55, phase: 'Default', source: 'DEFAULT' };
+    }
+
+    // Use sensitivity level values for dynamic thresholds
+    const tauThreshold = sensitivity.tau;
+    const altThreshold = sensitivity.vertThreshold;
+    const protectedVolume = sensitivity.protectedVol;
 
     // Extract closure info with defaults
     const horizTauSeconds = closureInfo?.tauSeconds ?? Infinity;
@@ -230,40 +347,47 @@ function classifyThreat(distanceNm, relAltFt, closureInfo = null) {
         tauSeconds: horizTauSeconds,
         vertTauSeconds: vertTauSeconds,
         modTauSeconds: modTauSeconds,
+        tauThreshold: tauThreshold,            // GDL 88 Look-Ahead Time from Table 4-2
         closureRate: closureRate,
         vertClosureRate: vertClosureRate,
         velocitySource: velocitySource,
         altThreshold: null,    // Will be set based on threat level
         distThreshold: null,   // Will be set based on threat level
-        altTrigger: false      // Whether altitude is within threshold
+        altTrigger: false,     // Whether altitude is within threshold
+        sensitivityLevel: sensitivity.level,  // GDL 88 sensitivity level
+        sensitivityPhase: sensitivity.phase,  // Flight phase description
+        sensitivitySource: sensitivity.source // Source of sensitivity selection (HAT, MSL, GPS_APPROACH, etc.)
     };
 
-    // Resolution Advisory (RA) - TCAS II only
-    // Immediate threat requiring evasive action
-    // RA: Very close traffic
-    if (distanceNm <= 0.20 && absRelAlt <= 600) {
-        result.level = 'RA';
-        result.distTrigger = true;
-        result.altThreshold = 600;
-        result.distThreshold = 0.20;
-        result.altTrigger = absRelAlt <= 600;
-        return result;
+    // Resolution Advisory (RA) - TCAS II only (NOT available on GDL 88)
+    // GDL 88 is a TAS (Traffic Alert System) that only generates TAs
+    // RA logic is skipped when using GDL 88 sensitivity levels
+    if (!CDTI_CONFIG.useGDL88Sensitivity) {
+        // TCAS II mode: RA for very close traffic
+        if (distanceNm <= 0.20 && absRelAlt <= 600) {
+            result.level = 'RA';
+            result.distTrigger = true;
+            result.altThreshold = 600;
+            result.distThreshold = 0.20;
+            result.altTrigger = absRelAlt <= 600;
+            return result;
+        }
     }
 
-    // Traffic Advisory (TA)
-    // Condition 1: Within distance threshold (0.20 to 0.55nm AND ±800 ft)
-    const inTADistanceZone = distanceNm <= 0.55 && absRelAlt <= 800;
+    // Traffic Advisory (TA) - GDL 88 primary alert type
+    // Condition 1: Within protected volume AND vertical threshold
+    const inTADistanceZone = distanceNm <= protectedVolume && absRelAlt <= altThreshold;
 
-    // Condition 2: TAU-based using MODIFIED TAU (considers both horizontal and vertical)
+    // Condition 2: TAU-based using sensitivity level's tau threshold
     // Modified tau uses min(horizontal, vertical) when converging vertically
     const horizTauTriggered = CDTI_CONFIG.tauEnabled &&
-                              horizTauSeconds <= CDTI_CONFIG.tauThreshold &&
-                              absRelAlt <= CDTI_CONFIG.tauAltitudeThreshold;
+                              horizTauSeconds <= tauThreshold &&
+                              absRelAlt <= altThreshold;
 
     // Vertical tau trigger: converging vertically and within time threshold
     const vertTauTriggered = CDTI_CONFIG.tauEnabled &&
                              vertClosureRate > 0 &&
-                             vertTauSeconds <= CDTI_CONFIG.tauThreshold;
+                             vertTauSeconds <= tauThreshold;
 
     // Combined: either horizontal or vertical tau triggered
     const tauTriggered = horizTauTriggered || vertTauTriggered;
@@ -273,25 +397,136 @@ function classifyThreat(distanceNm, relAltFt, closureInfo = null) {
         result.distTrigger = inTADistanceZone;
         result.tauTrigger = horizTauTriggered && !inTADistanceZone;
         result.vertTauTrigger = vertTauTriggered && !inTADistanceZone && !horizTauTriggered;
-        result.altThreshold = 800;
-        result.distThreshold = 0.55;
-        result.altTrigger = absRelAlt <= 800;
+        result.altThreshold = altThreshold;
+        result.distThreshold = protectedVolume;
+        result.altTrigger = absRelAlt <= altThreshold;
         return result;
     }
 
     // Proximity Advisory (PA)
-    // Within 4nm AND ±1,200 ft
-    if (distanceNm <= 4.0 && absRelAlt <= 1200) {
+    // Within 6nm AND ±1,200 ft (fixed thresholds per Garmin US011543)
+    if (distanceNm <= 6.0 && absRelAlt <= 1200) {
         result.level = 'PA';
         result.distTrigger = true;
         result.altThreshold = 1200;
-        result.distThreshold = 4.0;
+        result.distThreshold = 6.0;
         result.altTrigger = absRelAlt <= 1200;
         return result;
     }
 
     // Other Traffic (non-alerting)
     return result;
+}
+
+/**
+ * Apply sequential verification (persistence filtering) to threat level
+ * Per DO-317B, alerts should persist for N consecutive seconds before triggering
+ * This prevents nuisance alerts from momentary threshold crossings
+ *
+ * @param {string} targetId - Target aircraft identifier
+ * @param {string} rawLevel - Raw threat level from classifyThreat ('RA', 'TA', 'PA', 'OTHER')
+ * @param {number} currentTimeMs - Current simulation time in milliseconds
+ * @returns {string} Filtered threat level
+ */
+function applyThreatPersistence(targetId, rawLevel, currentTimeMs) {
+    const history = threatPersistence.history;
+    const threshold = threatPersistence.threshold;
+
+    // Clean up stale entries periodically
+    if (Math.random() < 0.01) {  // 1% chance each call
+        const cutoff = currentTimeMs - threatPersistence.maxAge;
+        for (const id in history) {
+            if (history[id].lastTime < cutoff) {
+                delete history[id];
+            }
+        }
+    }
+
+    // Get or create history entry for this target
+    if (!history[targetId]) {
+        history[targetId] = { level: 'OTHER', count: 0, lastTime: currentTimeMs };
+    }
+    const entry = history[targetId];
+
+    // Update timestamp
+    entry.lastTime = currentTimeMs;
+
+    // Threat level priority for comparison
+    const levelPriority = { 'OTHER': 0, 'PA': 1, 'TA': 2, 'RA': 3 };
+
+    // If raw level is TA (or RA), check persistence
+    if (rawLevel === 'TA' || rawLevel === 'RA') {
+        if (entry.level === rawLevel) {
+            // Same level as before - increment count
+            entry.count++;
+        } else if (levelPriority[rawLevel] > levelPriority[entry.level]) {
+            // Upgrading to higher threat - reset count
+            entry.level = rawLevel;
+            entry.count = 1;
+        } else {
+            // Downgrading - immediate (no hysteresis for now)
+            entry.level = rawLevel;
+            entry.count = 1;
+        }
+
+        // Only return TA/RA if persistence threshold met (0 = disabled)
+        if (threshold === 0 || entry.count >= threshold) {
+            return rawLevel;
+        } else {
+            // Not enough consecutive samples - show PA instead of TA
+            return 'PA';
+        }
+    } else {
+        // Raw level is PA or OTHER - immediate transition (no persistence needed)
+        entry.level = rawLevel;
+        entry.count = 1;
+        return rawLevel;
+    }
+}
+
+/**
+ * Apply 3-point moving average smoothing to altitude
+ * Reduces ADS-B altitude jitter that causes alert flickering
+ *
+ * @param {string} targetId - Target aircraft identifier
+ * @param {number} rawAltitude - Raw altitude reading in feet
+ * @param {number} currentTimeMs - Current simulation time in milliseconds
+ * @returns {number} Smoothed altitude
+ */
+function smoothAltitude(targetId, rawAltitude, currentTimeMs) {
+    const history = altitudeSmoothing.history;
+    const windowSize = altitudeSmoothing.windowSize;
+
+    // Clean up stale entries periodically
+    if (Math.random() < 0.01) {  // 1% chance each call
+        const cutoff = currentTimeMs - altitudeSmoothing.maxAge;
+        for (const id in history) {
+            if (history[id].lastTime < cutoff) {
+                delete history[id];
+            }
+        }
+    }
+
+    // Get or create history entry for this target
+    if (!history[targetId]) {
+        history[targetId] = { altitudes: [], lastTime: currentTimeMs };
+    }
+    const entry = history[targetId];
+
+    // Update timestamp
+    entry.lastTime = currentTimeMs;
+
+    // Add new altitude to history
+    entry.altitudes.push(rawAltitude);
+
+    // Keep only last N samples
+    while (entry.altitudes.length > windowSize) {
+        entry.altitudes.shift();
+    }
+
+    // Calculate moving average
+    const sum = entry.altitudes.reduce((a, b) => a + b, 0);
+    return sum / entry.altitudes.length;
 }
 
 /**
@@ -396,8 +631,10 @@ function drawCDTI() {
         const radius = range * scale;
         ctx.beginPath();
         ctx.arc(center, center, radius, 0, 2 * Math.PI);
-        
-        if (idx === 0) {
+
+        // Inner ring (first of two) is dotted; outer ring (or single ring) is solid
+        const isInnerRing = idx === 0 && CDTI_CONFIG.rangeRings.length > 1;
+        if (isInnerRing) {
             ctx.setLineDash([4, 4]);  // Inner ring dotted
             ctx.strokeStyle = '#080';
         } else {
@@ -406,7 +643,7 @@ function drawCDTI() {
         }
         ctx.lineWidth = 1;
         ctx.stroke();
-        
+
         // Range label
         ctx.fillStyle = '#0a0';
         ctx.font = '10px monospace';
@@ -426,6 +663,12 @@ function drawCDTI() {
     const trafficToDraw = [];
     const outOfRangeAlerts = [];  // RA/TA traffic beyond display range
 
+    // Get current time for smoothing and persistence
+    const currentTimeMs = Cesium.JulianDate.toDate(currentTime).getTime();
+
+    // Smooth ownship altitude (3-point moving average)
+    const ownshipAltSmoothed = smoothAltitude(ownship.id, ownship.alt, currentTimeMs);
+
     aircraftData.forEach(aircraft => {
         if (aircraft.id === CDTI_CONFIG.ownshipID) return;
 
@@ -433,8 +676,11 @@ function drawCDTI() {
         const rel = latLonToRelativeNM(ownship.lat, ownship.lon, aircraft.lat, aircraft.lon);
         const distance = Math.sqrt(rel.x * rel.x + rel.y * rel.y);
 
-        // Calculate relative altitude in feet
-        const relAltFt = aircraft.alt - ownship.alt;
+        // Smooth target altitude (3-point moving average to reduce ADS-B jitter)
+        const targetAltSmoothed = smoothAltitude(aircraft.id, aircraft.alt, currentTimeMs);
+
+        // Calculate relative altitude using smoothed values
+        const relAltFt = targetAltSmoothed - ownshipAltSmoothed;
         const relAltHundreds = Math.round(relAltFt / 100);
 
         // Apply altitude filter
@@ -443,9 +689,12 @@ function drawCDTI() {
         // Calculate closure and TAU (horizontal and vertical)
         const closureInfo = calculateClosure(ownship, aircraft, distance, rel, relAltFt);
 
-        // Classify threat level (now includes TAU-based alerting)
-        const threatResult = classifyThreat(distance, relAltFt, closureInfo);
-        const threatLevel = threatResult.level;
+        // Classify threat level (now includes TAU-based alerting with GDL 88 sensitivity)
+        const threatResult = classifyThreat(distance, relAltFt, closureInfo, ownshipAltSmoothed);
+
+        // Apply sequential verification (persistence filtering) per DO-317B
+        // Requires N consecutive seconds meeting TA criteria before triggering
+        const threatLevel = applyThreatPersistence(aircraft.id, threatResult.level, currentTimeMs);
 
         // Handle out-of-range traffic
         if (distance > maxRange) {
@@ -474,13 +723,47 @@ function drawCDTI() {
         // Calculate traffic heading relative to display
         const trafficHeading = (aircraft.heading || 0) - ownHeading;
 
+        // Calculate relative velocity for motion vectors (in display coordinates)
+        // Get ownship velocity components
+        let ownVx, ownVy;
+        if (ownship.Vx !== null && ownship.Vx !== undefined) {
+            ownVx = ownship.Vx;
+            ownVy = ownship.Vy;
+        } else {
+            const ownHdgRad = (ownship.heading || 0) * Math.PI / 180;
+            const ownGS = ownship.groundspeed || 120;
+            ownVx = ownGS * Math.sin(ownHdgRad);
+            ownVy = ownGS * Math.cos(ownHdgRad);
+        }
+
+        // Get target velocity components
+        let tgtVx, tgtVy;
+        if (aircraft.Vx !== null && aircraft.Vx !== undefined) {
+            tgtVx = aircraft.Vx;
+            tgtVy = aircraft.Vy;
+        } else {
+            const tgtHdgRad = (aircraft.heading || 0) * Math.PI / 180;
+            const tgtGS = aircraft.groundspeed || 100;
+            tgtVx = tgtGS * Math.sin(tgtHdgRad);
+            tgtVy = tgtGS * Math.cos(tgtHdgRad);
+        }
+
+        // Relative velocity (target relative to ownship) in geographic coords
+        const relVxGeo = tgtVx - ownVx;
+        const relVyGeo = tgtVy - ownVy;
+
+        // Rotate relative velocity to display coordinates (track-up)
+        const relVelRotated = rotatePoint(relVxGeo, relVyGeo, ownHeading);
+
         trafficToDraw.push({
             pos,
             trafficHeading,
             relAltHundreds,
             verticalRate: aircraft.verticalRate || 0,
             threatLevel,
-            distance
+            distance,
+            groundspeed: aircraft.groundspeed || 100,
+            relativeMotion: { vx: relVelRotated.x, vy: relVelRotated.y }
         });
     });
 
@@ -497,7 +780,12 @@ function drawCDTI() {
             traffic.trafficHeading,
             traffic.relAltHundreds,
             traffic.verticalRate,
-            traffic.threatLevel
+            traffic.threatLevel,
+            {
+                groundspeed: traffic.groundspeed,
+                scale: scale,
+                relativeMotion: traffic.relativeMotion
+            }
         );
     });
 
@@ -523,6 +811,17 @@ function drawCDTI() {
     ctx.font = '12px monospace';
     ctx.textAlign = 'center';
     ctx.fillText(`${Math.round(ownHeading).toString().padStart(3, '0')} TRUE`, center, 20);
+
+    // Draw GDL 88 sensitivity level indicator (top-left)
+    if (CDTI_CONFIG.useGDL88Sensitivity) {
+        const hat = ownship.alt - CDTI_CONFIG.kvgtElevation;
+        const sensitivity = getSensitivityLevel(ownship.alt, hat);
+        ctx.fillStyle = '#0f0';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(`SL${sensitivity.level} ${sensitivity.phase} [${sensitivity.source}]`, 8, 15);
+        ctx.fillText(`TAU:${sensitivity.tau}s VOL:${sensitivity.protectedVol}nm`, 8, 27);
+    }
 
     // Draw UTC clock at bottom (for screen capture)
     if (CDTI_CONFIG.showUTCClock) {
@@ -623,44 +922,231 @@ function drawRunways(ctx, ownLat, ownLon, ownHeading, scale, center, maxRange) {
 }
 
 /**
- * Draw ownship chevron symbol
+ * Draw ownship symbol - narrow isosceles triangle per G500 Figure 4-30
+ * Origin (x, y) is at the tip/nose of the triangle (center of screen)
+ * Shaded to appear as 3D tetrahedron
  */
 function drawOwnshipSymbol(ctx, x, y) {
-    const size = 12;
-    
-    ctx.strokeStyle = '#fff';
-    ctx.fillStyle = '#fff';
-    ctx.lineWidth = 2;
-    
+    const height = 32;  // Triangle height (tip to base)
+    const halfWidth = 8;  // Half-width at base (narrow isosceles)
+
+    // Tip at (x, y), base extends downward
+    const tipX = x;
+    const tipY = y;
+    const leftX = x - halfWidth;
+    const leftY = y + height;
+    const rightX = x + halfWidth;
+    const rightY = y + height;
+
+    // Left half (darker/shadowed side)
     ctx.beginPath();
-    // Chevron pointing up
-    ctx.moveTo(x, y - size);           // Top point
-    ctx.lineTo(x - size * 0.7, y + size * 0.5);  // Bottom left
-    ctx.lineTo(x, y);                   // Center notch
-    ctx.lineTo(x + size * 0.7, y + size * 0.5);  // Bottom right
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(leftX, leftY);
+    ctx.lineTo(tipX, leftY);  // Center bottom
     ctx.closePath();
+    ctx.fillStyle = '#888';  // Darker gray
     ctx.fill();
+
+    // Right half (lighter/illuminated side)
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(tipX, rightY);  // Center bottom
+    ctx.lineTo(rightX, rightY);
+    ctx.closePath();
+    ctx.fillStyle = '#fff';  // White/light
+    ctx.fill();
+
+    // Outline for definition
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(rightX, rightY);
+    ctx.lineTo(leftX, leftY);
+    ctx.closePath();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1;
+    ctx.stroke();
 }
 
 /**
- * Draw traffic symbol based on RTCA standard
- * - RA: Red filled square
- * - TA: Yellow filled circle
- * - PA: Cyan filled diamond
- * - OTHER: Cyan open/hollow diamond
+ * Draw directional arrow inside traffic symbol
+ * Per G500 Table 4-21: Directional traffic shows arrow pointing in direction of travel
+ * @param {CanvasRenderingContext2D} ctx - Canvas context
+ * @param {number} x - Center X position
+ * @param {number} y - Center Y position
+ * @param {number} heading - Traffic heading relative to display (already rotated for track-up)
+ * @param {number} arrowSize - Size of the arrow
+ * @param {string} arrowColor - Color for the arrow
  */
-function drawTrafficSymbol(ctx, x, y, heading, relAlt, verticalRate, threatLevel = 'OTHER') {
+function drawDirectionalArrow(ctx, x, y, heading, arrowSize, arrowColor) {
+    if (!CDTI_CONFIG.showDirectionalArrows) return;
+
+    // Convert heading to radians (0 = up on display after track-up rotation)
+    const headingRad = heading * Math.PI / 180;
+
+    // Arrow points in direction of travel
+    const tipX = x + Math.sin(headingRad) * arrowSize;
+    const tipY = y - Math.cos(headingRad) * arrowSize;
+
+    // Arrow base (opposite direction from tip)
+    const baseX = x - Math.sin(headingRad) * (arrowSize * 0.3);
+    const baseY = y + Math.cos(headingRad) * (arrowSize * 0.3);
+
+    // Arrow wings (perpendicular to direction)
+    const wingSpread = arrowSize * 0.4;
+    const wingBack = arrowSize * 0.5;
+    const perpX = Math.cos(headingRad);
+    const perpY = Math.sin(headingRad);
+
+    const wing1X = x - Math.sin(headingRad) * wingBack + perpX * wingSpread;
+    const wing1Y = y + Math.cos(headingRad) * wingBack + perpY * wingSpread;
+    const wing2X = x - Math.sin(headingRad) * wingBack - perpX * wingSpread;
+    const wing2Y = y + Math.cos(headingRad) * wingBack - perpY * wingSpread;
+
+    ctx.save();
+    ctx.fillStyle = arrowColor;
+    ctx.strokeStyle = arrowColor;
+    ctx.lineWidth = 1.5;
+
+    // Draw filled arrow shape
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(wing1X, wing1Y);
+    ctx.lineTo(baseX, baseY);
+    ctx.lineTo(wing2X, wing2Y);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.restore();
+}
+
+/**
+ * Draw motion vector extending from traffic symbol
+ * Per G500 Figures 4-33 and 4-34:
+ * - ABSOLUTE mode: Vector shows intruder's actual ground track, color matches intruder
+ * - RELATIVE mode: Vector shows intruder motion relative to ownship, color is green (yellow for TA)
+ *
+ * @param {CanvasRenderingContext2D} ctx - Canvas context
+ * @param {number} x - Symbol center X position (pixels)
+ * @param {number} y - Symbol center Y position (pixels)
+ * @param {number} heading - Traffic heading relative to display (degrees, already rotated for track-up)
+ * @param {number} groundspeed - Traffic groundspeed (knots)
+ * @param {number} scale - Pixels per nm
+ * @param {string} threatLevel - Threat classification (TA, PA, OTHER)
+ * @param {Object} relativeMotion - Optional {vx, vy} for relative motion mode (knots, display coords)
+ */
+function drawMotionVector(ctx, x, y, heading, groundspeed, scale, threatLevel, relativeMotion = null) {
+    if (CDTI_CONFIG.motionVectorMode === 'OFF') return;
+
+    const duration = CDTI_CONFIG.motionVectorDuration;  // seconds
+    const durationHours = duration / 3600;
+
+    let vectorX, vectorY, vectorColor;
+
+    if (CDTI_CONFIG.motionVectorMode === 'RELATIVE' && relativeMotion) {
+        // RELATIVE mode: Use relative velocity components
+        // relativeMotion.vx and vy are in knots (nm/hr), in display coordinates
+        vectorX = relativeMotion.vx * durationHours * scale;
+        vectorY = -relativeMotion.vy * durationHours * scale;  // Flip Y for canvas
+
+        // Color: green for normal traffic, yellow for TA (per G500)
+        vectorColor = (threatLevel === 'TA' || threatLevel === 'RA') ? '#FFFF00' : '#00FF00';
+    } else {
+        // ABSOLUTE mode: Use actual groundspeed and heading
+        const headingRad = heading * Math.PI / 180;
+        const distanceNm = groundspeed * durationHours;
+
+        // Convert to display coordinates (heading is already in track-up frame)
+        vectorX = Math.sin(headingRad) * distanceNm * scale;
+        vectorY = -Math.cos(headingRad) * distanceNm * scale;  // Flip Y for canvas
+
+        // Color: white for normal traffic (matches cyan intruder), yellow for TA
+        vectorColor = (threatLevel === 'TA' || threatLevel === 'RA') ? '#FFFF00' : '#FFFFFF';
+    }
+
+    // Don't draw if vector is too short (< 3 pixels)
+    const vectorLength = Math.sqrt(vectorX * vectorX + vectorY * vectorY);
+    if (vectorLength < 3) return;
+
+    ctx.save();
+    ctx.strokeStyle = vectorColor;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([]);
+
+    // Draw motion vector line
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + vectorX, y + vectorY);
+    ctx.stroke();
+
+    // Draw small arrowhead at end
+    const arrowSize = 4;
+    const angle = Math.atan2(vectorY, vectorX);
+    const endX = x + vectorX;
+    const endY = y + vectorY;
+
+    ctx.beginPath();
+    ctx.moveTo(endX, endY);
+    ctx.lineTo(
+        endX - arrowSize * Math.cos(angle - Math.PI / 6),
+        endY - arrowSize * Math.sin(angle - Math.PI / 6)
+    );
+    ctx.moveTo(endX, endY);
+    ctx.lineTo(
+        endX - arrowSize * Math.cos(angle + Math.PI / 6),
+        endY - arrowSize * Math.sin(angle + Math.PI / 6)
+    );
+    ctx.stroke();
+
+    ctx.restore();
+}
+
+/**
+ * Draw traffic symbol based on RTCA standard with G500 directional arrows and motion vectors
+ * - RA: Red filled square with directional arrow
+ * - TA: Yellow filled circle with directional arrow (G500 Table 4-21)
+ * - PA: Cyan filled diamond with directional arrow
+ * - OTHER: Cyan open/hollow diamond with directional arrow
+ *
+ * @param {CanvasRenderingContext2D} ctx - Canvas context
+ * @param {number} x - Center X position (pixels)
+ * @param {number} y - Center Y position (pixels)
+ * @param {number} heading - Traffic heading relative to display (degrees)
+ * @param {number} relAlt - Relative altitude in hundreds of feet
+ * @param {number} verticalRate - Vertical rate in fpm
+ * @param {string} threatLevel - Threat classification
+ * @param {Object} motionParams - Optional motion vector parameters {groundspeed, scale, relativeMotion}
+ */
+function drawTrafficSymbol(ctx, x, y, heading, relAlt, verticalRate, threatLevel = 'OTHER', motionParams = null) {
     const size = 8;
     const color = CDTI_COLORS[threatLevel];
+
+    // Draw motion vector first (behind symbol)
+    if (motionParams && CDTI_CONFIG.motionVectorMode !== 'OFF') {
+        drawMotionVector(
+            ctx, x, y,
+            heading,
+            motionParams.groundspeed || 0,
+            motionParams.scale || 1,
+            threatLevel,
+            motionParams.relativeMotion
+        );
+    }
 
     ctx.fillStyle = color;
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
 
+    // Choose arrow color based on threat level
+    // For TA/RA: use contrasting color (black for visibility on yellow/red)
+    // For PA/OTHER: use white for visibility on cyan
+    const arrowColor = (threatLevel === 'TA' || threatLevel === 'RA') ? '#000000' : '#FFFFFF';
+
     switch (threatLevel) {
         case 'RA':
             // Filled red square
             ctx.fillRect(x - size, y - size, size * 2, size * 2);
+            // Directional arrow inside
+            drawDirectionalArrow(ctx, x, y, heading, size * 0.7, arrowColor);
             break;
 
         case 'TA':
@@ -668,6 +1154,8 @@ function drawTrafficSymbol(ctx, x, y, heading, relAlt, verticalRate, threatLevel
             ctx.beginPath();
             ctx.arc(x, y, size, 0, 2 * Math.PI);
             ctx.fill();
+            // Directional arrow inside (G500 Table 4-21)
+            drawDirectionalArrow(ctx, x, y, heading, size * 0.7, arrowColor);
             break;
 
         case 'PA':
@@ -679,6 +1167,8 @@ function drawTrafficSymbol(ctx, x, y, heading, relAlt, verticalRate, threatLevel
             ctx.lineTo(x - size, y);        // Left
             ctx.closePath();
             ctx.fill();
+            // Directional arrow inside
+            drawDirectionalArrow(ctx, x, y, heading, size * 0.6, arrowColor);
             break;
 
         case 'OTHER':
@@ -691,6 +1181,8 @@ function drawTrafficSymbol(ctx, x, y, heading, relAlt, verticalRate, threatLevel
             ctx.lineTo(x - size, y);        // Left
             ctx.closePath();
             ctx.stroke();
+            // Directional arrow inside (smaller for hollow symbol)
+            drawDirectionalArrow(ctx, x, y, heading, size * 0.5, color);
             break;
     }
 
@@ -799,16 +1291,16 @@ function createCDTIOverlay() {
         position: absolute;
         top: 100px;
         right: 100px;
-        width: 450px;
-        height: 480px;
+        width: 550px;
+        height: 580px;
         z-index: 2000;
         display: none;
         background: rgba(30, 30, 30, 0.95);
         border-radius: 6px;
         border: 1px solid #555;
         box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
-        min-width: 300px;
-        min-height: 330px;
+        min-width: 500px;
+        min-height: 400px;
         resize: both;
         overflow: hidden;
     `;
@@ -829,7 +1321,68 @@ function createCDTIOverlay() {
     const titleText = document.createElement('span');
     titleText.style.cssText = `color: #ccc; font-size: 12px; font-family: monospace;`;
     titleText.textContent = 'CDTI - Traffic Display';
-    
+
+    // HAT/GPS Phase controls container (middle of title bar)
+    const hatControls = document.createElement('div');
+    hatControls.style.cssText = `
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-family: monospace;
+        font-size: 10px;
+        cursor: default;
+    `;
+    // Prevent drag handler from capturing clicks on controls
+    hatControls.onmousedown = (e) => e.stopPropagation();
+
+    // HAT Available checkbox
+    const hatLabel = document.createElement('label');
+    hatLabel.style.cssText = 'color: #aaa; display: flex; align-items: center; gap: 4px; cursor: pointer;';
+    const hatCheckbox = document.createElement('input');
+    hatCheckbox.type = 'checkbox';
+    hatCheckbox.checked = CDTI_CONFIG.hatAvailable;
+    hatCheckbox.style.cssText = 'cursor: pointer;';
+    hatCheckbox.onchange = (e) => {
+        CDTI_CONFIG.hatAvailable = e.target.checked;
+        // Update GPS phase selector visibility
+        gpsPhaseSelect.style.display = e.target.checked ? 'none' : 'inline';
+        gpsPhaseLabel.style.display = e.target.checked ? 'none' : 'inline';
+    };
+    hatLabel.appendChild(hatCheckbox);
+    hatLabel.appendChild(document.createTextNode('HAT'));
+
+    // GPS Phase selector (only visible when HAT unavailable)
+    const gpsPhaseLabel = document.createElement('span');
+    gpsPhaseLabel.style.cssText = 'color: #aaa;';
+    gpsPhaseLabel.style.display = CDTI_CONFIG.hatAvailable ? 'none' : 'inline';
+    gpsPhaseLabel.textContent = 'GPS Phase:';
+
+    const gpsPhaseSelect = document.createElement('select');
+    gpsPhaseSelect.style.cssText = 'font-size: 10px; padding: 2px 4px; background: #222; color: #fff; border: 1px solid #555; cursor: pointer;';
+    gpsPhaseSelect.style.display = CDTI_CONFIG.hatAvailable ? 'none' : 'inline';
+    const phaseOptions = [
+        { value: 'NONE', label: 'None/Unavailable' },
+        { value: 'APPROACH', label: 'Approach' },
+        { value: 'TERMINAL', label: 'Terminal' }
+    ];
+    phaseOptions.forEach(phase => {
+        const opt = document.createElement('option');
+        opt.value = phase.value;
+        opt.textContent = phase.label;
+        if (phase.value === CDTI_CONFIG.gpsPhase) opt.selected = true;
+        gpsPhaseSelect.appendChild(opt);
+    });
+    gpsPhaseSelect.onchange = (e) => {
+        CDTI_CONFIG.gpsPhase = e.target.value;
+    };
+    // Extra protection for the select element
+    gpsPhaseSelect.onclick = (e) => e.stopPropagation();
+    gpsPhaseSelect.onmousedown = (e) => e.stopPropagation();
+
+    hatControls.appendChild(hatLabel);
+    hatControls.appendChild(gpsPhaseLabel);
+    hatControls.appendChild(gpsPhaseSelect);
+
     const closeBtn = document.createElement('button');
     closeBtn.textContent = '✕';
     closeBtn.style.cssText = `
@@ -841,8 +1394,9 @@ function createCDTIOverlay() {
         padding: 0 4px;
     `;
     closeBtn.onclick = hideCDTI;
-    
+
     titleBar.appendChild(titleText);
+    titleBar.appendChild(hatControls);
     titleBar.appendChild(closeBtn);
     
     // Canvas container
@@ -859,8 +1413,8 @@ function createCDTIOverlay() {
     
     // Canvas
     cdtiCanvas = document.createElement('canvas');
-    cdtiCanvas.width = 400;
-    cdtiCanvas.height = 400;
+    cdtiCanvas.width = 500;
+    cdtiCanvas.height = 500;
     cdtiCanvas.style.cssText = `
         background: #000;
         border-radius: 4px;
@@ -889,7 +1443,8 @@ function createCDTIOverlay() {
 
     const rangeSelect = document.createElement('select');
     rangeSelect.style.cssText = 'font-size: 11px; padding: 2px; background: #222; color: #fff; border: 1px solid #555;';
-    [2, 5, 10, 20].forEach(r => {
+    // GTN-style range options
+    [2, 6, 12, 24, 48].forEach(r => {
         const opt = document.createElement('option');
         opt.value = r;
         opt.textContent = `${r} nm`;
@@ -898,15 +1453,18 @@ function createCDTIOverlay() {
     });
     rangeSelect.onchange = (e) => {
         CDTI_CONFIG.maxRange = parseInt(e.target.value);
-        // Update range rings based on selection
-        if (CDTI_CONFIG.maxRange <= 2) {
-            CDTI_CONFIG.rangeRings = [1, 2];
-        } else if (CDTI_CONFIG.maxRange <= 5) {
-            CDTI_CONFIG.rangeRings = [2, 5];
-        } else if (CDTI_CONFIG.maxRange <= 10) {
-            CDTI_CONFIG.rangeRings = [5, 10];
-        } else {
-            CDTI_CONFIG.rangeRings = [10, 20];
+        // Update range rings based on selection (GTN style)
+        // Pattern: outer ring = maxRange, inner ring = maxRange/2 (except 2nm has no inner)
+        if (CDTI_CONFIG.maxRange === 2) {
+            CDTI_CONFIG.rangeRings = [2];           // No inner ring
+        } else if (CDTI_CONFIG.maxRange === 6) {
+            CDTI_CONFIG.rangeRings = [2, 6];
+        } else if (CDTI_CONFIG.maxRange === 12) {
+            CDTI_CONFIG.rangeRings = [6, 12];
+        } else if (CDTI_CONFIG.maxRange === 24) {
+            CDTI_CONFIG.rangeRings = [12, 24];
+        } else if (CDTI_CONFIG.maxRange === 48) {
+            CDTI_CONFIG.rangeRings = [24, 48];
         }
     };
 
@@ -928,6 +1486,42 @@ function createCDTIOverlay() {
         CDTI_CONFIG.altitudeFilter = e.target.value;
     };
 
+    // Motion vector mode control
+    const vectorLabel = document.createElement('span');
+    vectorLabel.style.cssText = 'color: #aaa; font-size: 11px; font-family: monospace;';
+    vectorLabel.textContent = 'Vector:';
+
+    const vectorSelect = document.createElement('select');
+    vectorSelect.style.cssText = 'font-size: 11px; padding: 2px; background: #222; color: #fff; border: 1px solid #555;';
+    ['OFF', 'ABSOLUTE', 'RELATIVE'].forEach(mode => {
+        const opt = document.createElement('option');
+        opt.value = mode;
+        opt.textContent = mode.charAt(0) + mode.slice(1).toLowerCase();
+        if (mode === CDTI_CONFIG.motionVectorMode) opt.selected = true;
+        vectorSelect.appendChild(opt);
+    });
+    vectorSelect.onchange = (e) => {
+        CDTI_CONFIG.motionVectorMode = e.target.value;
+    };
+
+    // Motion vector duration control
+    const durationLabel = document.createElement('span');
+    durationLabel.style.cssText = 'color: #aaa; font-size: 11px; font-family: monospace;';
+    durationLabel.textContent = 'Dur:';
+
+    const durationSelect = document.createElement('select');
+    durationSelect.style.cssText = 'font-size: 11px; padding: 2px; background: #222; color: #fff; border: 1px solid #555;';
+    [30, 60, 120, 300].forEach(sec => {
+        const opt = document.createElement('option');
+        opt.value = sec;
+        opt.textContent = sec < 60 ? `${sec}s` : `${sec / 60}m`;
+        if (sec === CDTI_CONFIG.motionVectorDuration) opt.selected = true;
+        durationSelect.appendChild(opt);
+    });
+    durationSelect.onchange = (e) => {
+        CDTI_CONFIG.motionVectorDuration = parseInt(e.target.value);
+    };
+
     // Legend button
     const legendBtn = document.createElement('button');
     legendBtn.textContent = '?';
@@ -947,6 +1541,10 @@ function createCDTIOverlay() {
     controlsBar.appendChild(rangeSelect);
     controlsBar.appendChild(altLabel);
     controlsBar.appendChild(altSelect);
+    controlsBar.appendChild(vectorLabel);
+    controlsBar.appendChild(vectorSelect);
+    controlsBar.appendChild(durationLabel);
+    controlsBar.appendChild(durationSelect);
     controlsBar.appendChild(legendBtn);
     
     cdtiOverlay.appendChild(titleBar);
@@ -1074,21 +1672,21 @@ function createLegend() {
 
     cdtiLegend.innerHTML = `
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid #444; padding-bottom: 8px;">
-            <span style="font-size: 13px; font-weight: bold; color: #fff;">CDTI Symbology (RTCA)</span>
+            <span style="font-size: 13px; font-weight: bold; color: #fff;">CDTI Symbology (G500/RTCA)</span>
             <button id="cdtiLegendClose" style="background: transparent; color: #aaa; border: none; cursor: pointer; font-size: 16px; padding: 0 4px;">✕</button>
         </div>
 
         <div style="font-size: 11px; line-height: 1.8;">
-            <div style="margin-bottom: 10px; font-weight: bold; color: #fff;">Traffic Symbols:</div>
+            <div style="margin-bottom: 10px; font-weight: bold; color: #fff;">Traffic Symbols (with directional arrows):</div>
 
             <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
                 <svg width="24" height="24"><rect x="4" y="4" width="16" height="16" fill="#FF0000"/></svg>
-                <span><span style="color: #FF0000; font-weight: bold;">RA</span> - Resolution Advisory (TCAS II)</span>
+                <span><span style="color: #FF0000; font-weight: bold;">RA</span> - Resolution Advisory (TCAS II only)</span>
             </div>
 
             <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
                 <svg width="24" height="24"><circle cx="12" cy="12" r="8" fill="#FFFF00"/></svg>
-                <span><span style="color: #FFFF00; font-weight: bold;">TA</span> - Traffic Advisory (≤0.55nm, ±800ft)</span>
+                <span><span style="color: #FFFF00; font-weight: bold;">TA</span> - Traffic Advisory (GDL 88 TAS)</span>
             </div>
 
             <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
@@ -1101,12 +1699,26 @@ function createLegend() {
                 <span style="color: #00FFFF;">Other Traffic (non-alerting)</span>
             </div>
 
+            <div style="margin: 10px 0; font-weight: bold; color: #fff;">Motion Vectors (G500):</div>
+            <div style="margin-left: 10px; font-size: 10px;">
+                <div><span style="color: #fff;">Absolute:</span> Shows actual ground track (white/yellow)</div>
+                <div><span style="color: #0f0;">Relative:</span> Shows motion relative to ownship (green)</div>
+            </div>
+
+            <div style="margin: 10px 0; font-weight: bold; color: #fff;">GDL 88 Sensitivity Levels (SL4-SL9):</div>
+            <div style="margin-left: 10px; font-size: 10px;">
+                <div>SL4: HAT ≤1000ft (TAU=20s, Vol=0.20nm)</div>
+                <div>SL5: HAT 1000-2350ft (TAU=25s, Vol=0.20nm)</div>
+                <div>SL6: MSL ≤5000ft (TAU=30s, Vol=0.35nm)</div>
+                <div>SL7: MSL 5-10kft (TAU=40s, Vol=0.55nm)</div>
+                <div>SL8: MSL 10-20kft (TAU=45s, Vol=0.80nm)</div>
+                <div>SL9: MSL 20-42kft (TAU=48s, Vol=1.10nm)</div>
+            </div>
+
             <div style="margin: 10px 0; font-weight: bold; color: #fff;">Altitude Tag:</div>
             <div style="margin-left: 10px; margin-bottom: 6px;">
-                <span style="color: #00FFFF;">+05</span> = 500ft above ownship
-            </div>
-            <div style="margin-left: 10px; margin-bottom: 6px;">
-                <span style="color: #00FFFF;">-02</span> = 200ft below ownship
+                <span style="color: #00FFFF;">+05</span> = 500ft above &nbsp;&nbsp;
+                <span style="color: #00FFFF;">-02</span> = 200ft below
             </div>
 
             <div style="margin: 10px 0; font-weight: bold; color: #fff;">Vertical Trend (>500 fpm):</div>
@@ -1117,10 +1729,8 @@ function createLegend() {
 
             <div style="margin: 10px 0; font-weight: bold; color: #fff;">Altitude Filters:</div>
             <div style="margin-left: 10px; font-size: 10px;">
-                <div>NORM: ±2,700ft</div>
-                <div>ABV: -2,700 to +9,000ft</div>
-                <div>BLW: -9,000 to +2,700ft</div>
-                <div>XTD: ±9,000ft</div>
+                <div>NORM: ±2,700ft &nbsp; ABV: -2.7k to +9kft</div>
+                <div>BLW: -9k to +2.7kft &nbsp; XTD: ±9,000ft</div>
             </div>
         </div>
     `;
@@ -1180,6 +1790,10 @@ function exportCDTIData() {
     console.log('CDTI Export: Starting batch export...');
     const startTime = performance.now();
 
+    // Clear persistence and smoothing history for fresh export run
+    threatPersistence.history = {};
+    altitudeSmoothing.history = {};
+
     // Get time range from viewer clock
     const clockStart = viewerRef.clock.startTime;
     const clockStop = viewerRef.clock.stopTime;
@@ -1201,6 +1815,12 @@ function exportCDTIData() {
 
         if (!ownship) continue;
 
+        // Get current time for smoothing
+        const currentTimeMs = Cesium.JulianDate.toDate(currentTime).getTime();
+
+        // Smooth ownship altitude
+        const ownshipAltSmoothed = smoothAltitude(ownship.id, ownship.alt, currentTimeMs);
+
         // Evaluate each traffic aircraft
         aircraftData.forEach(aircraft => {
             if (aircraft.id === CDTI_CONFIG.ownshipID) return;
@@ -1209,17 +1829,25 @@ function exportCDTIData() {
             const rel = latLonToRelativeNM(ownship.lat, ownship.lon, aircraft.lat, aircraft.lon);
             const distance = Math.sqrt(rel.x * rel.x + rel.y * rel.y);
 
-            // Calculate relative altitude
-            const relAltFt = aircraft.alt - ownship.alt;
+            // Smooth target altitude
+            const targetAltSmoothed = smoothAltitude(aircraft.id, aircraft.alt, currentTimeMs);
+
+            // Calculate relative altitude using smoothed values
+            const relAltFt = targetAltSmoothed - ownshipAltSmoothed;
 
             // Calculate closure and TAU (horizontal and vertical)
             const closureInfo = calculateClosure(ownship, aircraft, distance, rel, relAltFt);
 
-            // Classify threat (now includes TAU-based alerting)
-            const threatResult = classifyThreat(distance, relAltFt, closureInfo);
+            // Classify threat (now includes TAU-based alerting with GDL 88 sensitivity)
+            const threatResult = classifyThreat(distance, relAltFt, closureInfo, ownshipAltSmoothed);
+            const rawLevel = threatResult.level;
 
-            // Only log RA, TA, PA (not OTHER)
-            if (threatResult.level === 'OTHER') return;
+            // Apply sequential verification (persistence filtering)
+            const currentTimeMs = Cesium.JulianDate.toDate(currentTime).getTime();
+            const filteredLevel = applyThreatPersistence(aircraft.id, rawLevel, currentTimeMs);
+
+            // Only log RA, TA, PA (not OTHER) - use raw level for logging
+            if (rawLevel === 'OTHER') return;
 
             // Deduplication: only log once per second per target
             const targetKey = aircraft.id;
@@ -1231,13 +1859,14 @@ function exportCDTIData() {
             const absRelAlt = Math.abs(relAltFt);
             let alertBasis = [];
 
-            // Altitude is always a factor for alerts
-            if (threatResult.level === 'RA' && absRelAlt <= 600) alertBasis.push('ALT');
-            else if (threatResult.level === 'TA' && absRelAlt <= 800) alertBasis.push('ALT');
-            else if (threatResult.level === 'PA' && absRelAlt <= 1200) alertBasis.push('ALT');
+            // Altitude is always a factor for alerts - use dynamic thresholds from threat result
+            if (threatResult.altTrigger) alertBasis.push('ALT');
 
             if (threatResult.distTrigger) alertBasis.push('DIST');
             if (threatResult.tauTrigger || threatResult.vertTauTrigger) alertBasis.push('TAU');
+
+            // Calculate HAT for export
+            const ownshipHAT = Math.round(ownship.alt - CDTI_CONFIG.kvgtElevation);
 
             // Create export entry
             exportLog.push({
@@ -1246,30 +1875,38 @@ function exportCDTIData() {
                 ownship_id: ownship.id,
                 ownship_lat: ownship.lat.toFixed(6),
                 ownship_lon: ownship.lon.toFixed(6),
-                ownship_alt_ft: Math.round(ownship.alt),
+                ownship_alt_raw_ft: Math.round(ownship.alt),
+                ownship_alt_smooth_ft: Math.round(ownshipAltSmoothed),
+                ownship_hat_ft: ownshipHAT,
                 ownship_hdg: Math.round(ownship.heading || 0),
                 ownship_vs_fpm: Math.round(ownship.verticalRate || 0),
                 target_id: aircraft.id,
                 target_lat: aircraft.lat.toFixed(6),
                 target_lon: aircraft.lon.toFixed(6),
-                target_alt_ft: Math.round(aircraft.alt),
+                target_alt_raw_ft: Math.round(aircraft.alt),
+                target_alt_smooth_ft: Math.round(targetAltSmoothed),
                 target_hdg: Math.round(aircraft.heading || 0),
                 target_vs_fpm: Math.round(aircraft.verticalRate || 0),
-                threat_level: threatResult.level,
                 distance_nm: distance.toFixed(3),
                 dist_threshold_nm: threatResult.distThreshold,
-                rel_alt_ft: Math.round(relAltFt),
+                rel_alt_smooth_ft: Math.round(relAltFt),
                 alt_threshold_ft: threatResult.altThreshold,
                 horiz_closure_kts: Math.round(threatResult.closureRate),
                 vert_closure_fpm: Math.round(threatResult.vertClosureRate),
                 horiz_tau_sec: threatResult.tauSeconds === Infinity ? 'INF' : threatResult.tauSeconds.toFixed(1),
                 vert_tau_sec: threatResult.vertTauSeconds === Infinity ? 'INF' : threatResult.vertTauSeconds.toFixed(1),
                 mod_tau_sec: threatResult.modTauSeconds === Infinity ? 'INF' : threatResult.modTauSeconds.toFixed(1),
+                tau_threshold_sec: threatResult.tauThreshold,
                 dist_trigger: threatResult.distTrigger ? 1 : 0,
                 alt_trigger: threatResult.altTrigger ? 1 : 0,
                 horiz_tau_trigger: threatResult.tauTrigger ? 1 : 0,
                 vert_tau_trigger: threatResult.vertTauTrigger ? 1 : 0,
                 alert_basis: alertBasis.join('+') || 'NONE',
+                threat_level_raw: rawLevel,
+                threat_level_filtered: filteredLevel,
+                sensitivity_level: threatResult.sensitivityLevel,
+                sensitivity_phase: threatResult.sensitivityPhase,
+                sensitivity_source: threatResult.sensitivitySource,
                 velocity_source: threatResult.velocitySource
             });
         });
@@ -1298,30 +1935,38 @@ function exportToCSV(data) {
         'ownship_id',
         'ownship_lat',
         'ownship_lon',
-        'ownship_alt_ft',
+        'ownship_alt_raw_ft',
+        'ownship_alt_smooth_ft',
+        'ownship_hat_ft',
         'ownship_hdg',
         'ownship_vs_fpm',
         'target_id',
         'target_lat',
         'target_lon',
-        'target_alt_ft',
+        'target_alt_raw_ft',
+        'target_alt_smooth_ft',
         'target_hdg',
         'target_vs_fpm',
-        'threat_level',
         'distance_nm',
         'dist_threshold_nm',
-        'rel_alt_ft',
+        'rel_alt_smooth_ft',
         'alt_threshold_ft',
         'horiz_closure_kts',
         'vert_closure_fpm',
         'horiz_tau_sec',
         'vert_tau_sec',
         'mod_tau_sec',
+        'tau_threshold_sec',
         'dist_trigger',
         'alt_trigger',
         'horiz_tau_trigger',
         'vert_tau_trigger',
         'alert_basis',
+        'threat_level_raw',
+        'threat_level_filtered',
+        'sensitivity_level',
+        'sensitivity_phase',
+        'sensitivity_source',
         'velocity_source'
     ];
 
@@ -1332,30 +1977,38 @@ function exportToCSV(data) {
         'Ownship ID',
         'Ownship Lat',
         'Ownship Lon',
-        'Ownship Alt ft',
+        'Ownship Alt Raw ft',
+        'Ownship Alt Smooth ft',
+        'Ownship HAT ft',
         'Ownship Hdg',
         'Ownship VS fpm',
         'Target ID',
         'Target Lat',
         'Target Lon',
-        'Target Alt ft',
+        'Target Alt Raw ft',
+        'Target Alt Smooth ft',
         'Target Hdg',
         'Target VS fpm',
-        'Threat Level',
         'Distance nm',
         'Dist Threshold nm',
-        'Rel Alt ft',
+        'Rel Alt Smooth ft',
         'Alt Threshold ft',
         'Horiz Closure kts',
         'Vert Closure fpm',
         'Horiz TAU sec',
         'Vert TAU sec',
         'Mod TAU sec',
+        'TAU Threshold sec',
         'Dist Trigger',
         'Alt Trigger',
         'Horiz TAU Trigger',
         'Vert TAU Trigger',
         'Alert Basis',
+        'Threat Level Raw',
+        'Threat Level Filtered',
+        'Sensitivity Level',
+        'Sensitivity Phase',
+        'Sensitivity Source',
         'Velocity Source'
     ];
 
@@ -1367,15 +2020,21 @@ function exportToCSV(data) {
         csv += row.join(',') + '\n';
     }
 
-    // Download - filename reflects TAU config: t=time(s), d=distance(nm*100), a=altitude(ft)
+    // Download - filename with timestamp
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
-    const tauT = Math.round(CDTI_CONFIG.tauThreshold);
-    const tauD = Math.round(CDTI_CONFIG.tauDistanceThreshold * 100);
-    const tauA = Math.round(CDTI_CONFIG.tauAltitudeThreshold);
+    const now = new Date();
+    const timestamp = [
+        now.getFullYear(),
+        String(now.getMonth() + 1).padStart(2, '0'),
+        String(now.getDate()).padStart(2, '0'),
+        String(now.getHours()).padStart(2, '0'),
+        String(now.getMinutes()).padStart(2, '0'),
+        String(now.getSeconds()).padStart(2, '0')
+    ].join('_');
     link.setAttribute('href', url);
-    link.setAttribute('download', `cdti_t${tauT}_d${tauD}_a${tauA}.csv`);
+    link.setAttribute('download', `cdti_log_${timestamp}.csv`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -1404,6 +2063,16 @@ export function setupCDTI(viewer, getAircraftData) {
     cdtiButton.onclick = toggleCDTI;
     document.body.appendChild(cdtiButton);
 
+    // Create Export button (to the right of CDTI)
+    exportButton = document.createElement('button');
+    exportButton.textContent = 'Export';
+    exportButton.style.position = 'absolute';
+    exportButton.style.top = '20px';
+    exportButton.style.left = '380px';
+    exportButton.style.zIndex = '1000';
+    exportButton.onclick = exportCDTIData;
+    document.body.appendChild(exportButton);
+
     // Create overlay
     createCDTIOverlay();
 
@@ -1416,6 +2085,7 @@ export function setupCDTI(viewer, getAircraftData) {
 export function removeCDTI() {
     stopUpdating();
     if (cdtiButton) cdtiButton.remove();
+    if (exportButton) exportButton.remove();
     if (cdtiOverlay) cdtiOverlay.remove();
     if (cdtiLegend) cdtiLegend.remove();
 }

@@ -1082,14 +1082,14 @@ function buildAircraftList() {
         }
     }
 
-    // Separator
-    listContainer.appendChild(createSeparator());
-
-    // Aircraft below the line
-    AIRCRAFT_BELOW_LINE.forEach(id => {
-        const row = createAircraftRow(id);
-        if (row) listContainer.appendChild(row);
-    });
+    // Aircraft below the line (if any)
+    if (AIRCRAFT_BELOW_LINE.length > 0) {
+        listContainer.appendChild(createSeparator());
+        AIRCRAFT_BELOW_LINE.forEach(id => {
+            const row = createAircraftRow(id);
+            if (row) listContainer.appendChild(row);
+        });
+    }
 
     // ========== 3D Models Section ==========
     if (SHOW_3D_MODELS) {

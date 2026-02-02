@@ -9,6 +9,7 @@ let ATCTLon = null;
 let reportingPointEntities = [];
 let referencePointEntities = [];  // For Lauer X and similar
 let lauerBearingLineEntity = null;  // Line from ATCT through Lauer X
+let lauerVerticalPoleEntity = null;  // Vertical pole at Lauer X extending to 3,500 ft
 let panel, toggleBtn, listContainer;
 let panelVisible = false;
 
@@ -277,7 +278,7 @@ function createLauerBearingLine() {
             width: 3,
             material: new Cesium.PolylineDashMaterialProperty({
                 color: Cesium.Color.YELLOW,
-                dashLength: 16.0,
+                dashLength: 8.0,
                 dashPattern: 255  // 0b11111111 = dot-dash pattern
             }),
             clampToGround: true
@@ -290,6 +291,43 @@ function createLauerBearingLine() {
 function setLauerBearingLineVisible(show) {
     if (lauerBearingLineEntity) {
         lauerBearingLineEntity.show = show;
+    }
+}
+
+// ===========================================================
+//        LAUER VERTICAL POLE (at Lauer X, extending to 3,500 ft MSL)
+// ===========================================================
+
+async function createLauerVerticalPole() {
+    // Find Lauer X reference point
+    const lauerX = REFERENCE_POINTS.find(p => p.name === "Lauer 'X'");
+    if (!lauerX) return;
+
+    // Get terrain height at Lauer X
+    const groundHeight = await getTerrainHeight(lauerX.lon, lauerX.lat);
+
+    // Convert 3,500 ft MSL to meters
+    const topHeightMSL = 3500 * 0.3048;  // feet to meters
+
+    // Create the vertical pole entity (hidden by default) - solid cyan
+    lauerVerticalPoleEntity = viewerRef.entities.add({
+        show: false,
+        polyline: {
+            positions: Cesium.Cartesian3.fromDegreesArrayHeights([
+                lauerX.lon, lauerX.lat, groundHeight,
+                lauerX.lon, lauerX.lat, topHeightMSL
+            ]),
+            width: 3,
+            material: Cesium.Color.CYAN
+        }
+    });
+
+    console.log(`Lauer vertical pole: ground ${(groundHeight * 3.28084).toFixed(0)} ft to 3,500 ft MSL`);
+}
+
+function setLauerVerticalPoleVisible(show) {
+    if (lauerVerticalPoleEntity) {
+        lauerVerticalPoleEntity.show = show;
     }
 }
 
@@ -396,8 +434,9 @@ function buildList() {
         row.appendChild(label);
         listContainer.appendChild(row);
 
-        // Add Lauer bearing line checkbox after "Lauer 'X'"
+        // Add Lauer bearing line and vertical pole checkboxes after "Lauer 'X'"
         if (rp.cfg.name === "Lauer 'X'") {
+            // ATCT → Lauer X bearing line checkbox
             const bearingRow = document.createElement("div");
             bearingRow.style.marginLeft = "18px";  // Indent under Lauer X
 
@@ -409,12 +448,31 @@ function buildList() {
             const bearingLabel = document.createElement("label");
             bearingLabel.style.fontSize = "11px";
             bearingLabel.style.color = "#FFFF00";  // Yellow to match line color
-            bearingLabel.innerText = "ATCT → Lauer X";
+            bearingLabel.innerText = "Surface Line: ATCT → 'X'";
             bearingLabel.style.marginLeft = "4px";
 
             bearingRow.appendChild(bearingCb);
             bearingRow.appendChild(bearingLabel);
             listContainer.appendChild(bearingRow);
+
+            // Vertical pole checkbox (3,500 ft MSL)
+            const poleRow = document.createElement("div");
+            poleRow.style.marginLeft = "18px";  // Indent under Lauer X
+
+            const poleCb = document.createElement("input");
+            poleCb.type = "checkbox";
+            poleCb.setAttribute("data-type", "lauer-pole");
+            poleCb.onchange = () => setLauerVerticalPoleVisible(poleCb.checked);
+
+            const poleLabel = document.createElement("label");
+            poleLabel.style.fontSize = "11px";
+            poleLabel.style.color = "#00FFFF";  // Cyan to match pole color
+            poleLabel.innerText = "Vertical Pole @ 'X'";
+            poleLabel.style.marginLeft = "4px";
+
+            poleRow.appendChild(poleCb);
+            poleRow.appendChild(poleLabel);
+            listContainer.appendChild(poleRow);
         }
     });
 
@@ -480,5 +538,6 @@ export async function initReportingPoints(viewer, atctLat, atctLon) {
     await createReportingPoints();
     await createReferencePoints();
     createLauerBearingLine();
+    await createLauerVerticalPole();
     buildList();
 }

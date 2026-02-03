@@ -5,7 +5,6 @@
 // ===========================================================
 // Set to false to disable features before deployment
 const FEATURES = {
-    ghostPaths: true,
     azElRays: false,
     ambiguitySurface: false,
     followView: true,
@@ -17,7 +16,6 @@ const FEATURES = {
 
 
 // const FEATURES = {
-//     ghostPaths: true,          // Ghost path visualizations in aircraft panel
 //     azElRays: true,            // Azimuth/elevation rays
 //     ambiguitySurface: true,    // Cone of ambiguity surface
 //     followView: true,          // Cockpit follow camera
@@ -834,11 +832,6 @@ const FIXED_ASSIGNMENTS = {
     "N738CY": Cesium.Color.GREEN,
     "N466MD": Cesium.Color.MAGENTA,
     "Olsen": Cesium.Color.YELLOW,
-    // Ghost paths - v1 use aqua, v2 use dark orange
-    "Ghost_090x": Cesium.Color.AQUA.withAlpha(0.7),
-    "Ghost_110x": Cesium.Color.AQUA.withAlpha(0.7),
-    "Ghost_090xv2": Cesium.Color.DARKORANGE.withAlpha(0.7),
-    "Ghost_110xv2": Cesium.Color.DARKORANGE.withAlpha(0.7),
 };
 
 
@@ -991,19 +984,10 @@ const availableFiles = [
     "Sim_xyz.csv",
     "Olsen_xyz.csv",
     "N2406P_xyz.csv",
-    // Ghost paths (same azimuth/elevation from ATCT, different ranges)
-    "Ghost_090x_xyz.csv",
-    "Ghost_110x_xyz.csv",
-    "Ghost_090xv2_xyz.csv",
-    "Ghost_110xv2_xyz.csv",
 ];
 
 
 const availableDrones = availableFiles.map(f => {
-    // Handle Ghost files specially (they have format Ghost_NNNx_xyz.csv)
-    if (f.startsWith("Ghost_")) {
-        return f.replace("_xyz.csv", "");  // "Ghost_150x_xyz.csv" → "Ghost_150x"
-    }
     return f.split("_")[0];  // "N97CX_xyz.csv" → "N97CX"
 });
 
@@ -1168,8 +1152,6 @@ setupAircraftPanelUI(
     },
     // Options
     { 
-        showGhostPaths: FEATURES.ghostPaths,
-        
         showFullPath: (droneID) => {
             const drone = activeDrones[droneID];
             if (!drone || !drone._fullPathPositions) {
@@ -1915,42 +1897,6 @@ function checkPlaybackSpeed() {
 viewer.clock.onTick.addEventListener(checkPlaybackSpeed);
 
 
-// // Build Drone Toggle UI - pass feature flag for ghost paths
-// setupAircraftPanelUI(
-//     viewer,
-//     availableDrones,
-//     defaultDrones,
-//     (droneID) => loadDrone(`${droneID}_xyz.csv`, droneID),   // load
-//     (droneID) => {                                            // unload
-//         viewer.entities.removeById(droneID);
-//         viewer.entities.removeById(`history-${droneID}`);
-//         viewer.entities.removeById(`groundline-${droneID}`);
-//         viewer.entities.removeById(`fullpath-${droneID}`);   // Also remove full path
-//         delete activeDrones[droneID];
-//         delete droneHistories[droneID];
-//         loadedDrones.delete(droneID);
-//     },
-//     { 
-//         showGhostPaths: FEATURES.ghostPaths,
-//         showFullPath: (droneID) => {
-//             // Get the drone's full position data and create polyline
-//             const drone = activeDrones[droneID];
-//             if (!drone || !drone.positions) return;
-            
-//             viewer.entities.add({
-//                 id: `fullpath-${droneID}`,
-//                 polyline: {
-//                     positions: drone.positions,  // All Cartesian3 positions
-//                     width: 2,
-//                     material: Cesium.Color.YELLOW.withAlpha(0.7)
-//                 }
-//             });
-//         },
-//         hideFullPath: (droneID) => {
-//             viewer.entities.removeById(`fullpath-${droneID}`);
-//         }
-//     }
-// );
 
 
 if (FEATURES.reportingPoints) {

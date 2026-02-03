@@ -728,16 +728,4 @@ function refreshTrackingList(trackSelect) {
         trackSelect.appendChild(opt);
     });
 
-    // Add ghost 3D aircraft (if they exist)
-    const ghostIds = ['Ghost_080x', 'Ghost_090x', 'Ghost_110x', 'Ghost_120x'];
-    ghostIds.forEach(ghostId => {
-        const entityId = `${ghostId}-3d`;
-        const ent = viewerRef.entities.getById(entityId);
-        if (!ent) return;
-
-        const opt = document.createElement("option");
-        opt.value = entityId;
-        opt.textContent = ghostId.replace('_', ' ');  // "Ghost 090x"
-        trackSelect.appendChild(opt);
-    });
 }

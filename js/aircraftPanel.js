@@ -230,10 +230,6 @@ function createSeparator() {
 
 
 // ===========================================================
-//                GHOST PATHS SECTION
-// ===========================================================
-
-// ===========================================================
 //              HISTORICAL APPROACHES SECTION
 // ===========================================================
 
@@ -1111,7 +1107,6 @@ function buildAircraftList() {
 
         viewableCb.addEventListener("change", () => {
             setAllModelsViewableAtDistance(viewableCb.checked);
-            setAllGhostsViewableAtDistance(viewableCb.checked);
         });
 
         const viewableLabel = document.createElement("label");

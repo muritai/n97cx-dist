@@ -133,7 +133,6 @@ import { setupAircraftPanelUI } from "./aircraftPanel.js";
 import { setupATCTView } from "./atctView.js";
 import { setupFollowView, disableFollowView, isFollowEnabled, updateFollowCamera }
     from "./followView.js";
-import { setupGhostAircraft } from "./ghostAircraft.js";
 
 import { setupFalconLimits, toggleFalconLimits, setFalconLimitsVisible } from './FalconLimits.js';
 
@@ -970,9 +969,6 @@ setupFollowView(viewer, followBtn);
 
 // Initialize ATCT View module
 setupATCTView(viewer, ATCTLat, ATCTLon, ATCTHeight);
-
-// Initialize Ghost Aircraft module
-setupGhostAircraft(viewer);
 
 
 

@@ -5,8 +5,6 @@
 // ===========================================================
 // Set to false to disable features before deployment
 const FEATURES = {
-    azElRays: false,
-    ambiguitySurface: false,
     followView: true,
     runwayCenterlines: true,
     reportingPoints: true,
@@ -16,8 +14,6 @@ const FEATURES = {
 
 
 // const FEATURES = {
-//     azElRays: true,            // Azimuth/elevation rays
-//     ambiguitySurface: true,    // Cone of ambiguity surface
 //     followView: true,          // Cockpit follow camera
 //     runwayCenterlines: true,   // Extended runway centerlines
 //     reportingPoints: true,     // VFR reporting points
@@ -117,15 +113,6 @@ setupHistoricalMeasurement(viewer, ATCTLat, ATCTLon, ATCTHeight);
 
 import { setupMeasurements } from "./measurements.js";
 setupMeasurements(viewer, ATCTLat, ATCTLon);
-
-if (FEATURES.azElRays) {
-    import("./azElRays.js").then(m => {
-        m.setupAzElRays(viewer);
-        if (FEATURES.ambiguitySurface) {
-            m.setupAmbiguitySurface(viewer);
-        }
-    });
-}
 
 import { setupAircraftPanelUI } from "./aircraftPanel.js";
 import { setupATCTView } from "./atctView.js";

@@ -191,15 +191,17 @@ let isLegendVisible = false;
 let updateTimer = null;
 let getAircraftDataFn = null;  // Function to get all aircraft positions
 let lastTAAlertTime = 0;        // Timestamp of last TA alert (for persistence)
+let lastTAMessageLockTime = 0;  // Timestamp when text message was first set (lock duration)
 let lastTAAudioTime = 0;        // Timestamp of last TA audio processing (rewind guard)
 let lastTAIds = new Set();      // Track active TA targets to dedupe spoken alerts
 let lastProcessedTimeMs = 0;    // Rewind detection: last simulation time processed
 
 // Threat persistence tracking (sequential verification per DO-317B)
-// Tracks consecutive seconds each target has met TA criteria
+// Tracks consecutive seconds each target has met TA/PA criteria
 const threatPersistence = {
-    history: {},        // { targetId: { level, count, lastTime, confirmedTime } }
+    history: {},        // { targetId: { level, startTime, lastTime, confirmedTime } }
     threshold: 2,       // Seconds required before upgrading to TA (0 = disabled)
+    paThreshold: 1,     // Seconds required before upgrading to PA (0 = disabled)
     holdDuration: 6000, // ms - minimum TA display time per DO-317B (6 seconds)
     maxAge: 10000,      // ms - remove stale entries older than this
 };
@@ -207,14 +209,14 @@ const threatPersistence = {
 // Divergence tracking (DO-317B divergence test)
 // Tracks consecutive seconds a TA-level target has been diverging
 const divergenceTracking = {
-    history: {},        // { targetId: { count: N, lastTime: ms } }
+    history: {},        // { targetId: { startTime: ms, lastTime: ms } }
     maxAge: 5000,       // ms - remove stale entries older than this
 };
 
 // Altitude smoothing (3-point moving average to reduce ADS-B jitter)
 const altitudeSmoothing = {
     history: {},        // { targetId: [alt1, alt2, alt3] } - recent altitude readings
-    windowSize: 1,      // Number of samples to average
+    windowSize: 5,      // Number of samples to average
     maxAge: 5000,       // ms - remove stale entries older than this
 };
 
@@ -478,40 +480,35 @@ function applyThreatPersistence(targetId, rawLevel, currentTimeMs) {
 
     // Get or create history entry for this target
     if (!history[targetId]) {
-        history[targetId] = { level: 'OTHER', count: 0, lastTime: currentTimeMs, confirmedTime: 0 };
+        history[targetId] = { level: 'OTHER', startTime: 0, lastTime: currentTimeMs, confirmedTime: 0 };
     }
     const entry = history[targetId];
 
     // Update timestamp
     entry.lastTime = currentTimeMs;
 
-    // Threat level priority for comparison
-    const levelPriority = { 'OTHER': 0, 'PA': 1, 'TA': 2, 'RA': 3 };
-
-    // If raw level is TA (or RA), check upgrade persistence
+    // If raw level is TA (or RA), check upgrade persistence using elapsed time
     if (rawLevel === 'TA' || rawLevel === 'RA') {
         if (entry.level === rawLevel) {
-            // Same level as before - increment count
-            entry.count++;
-        } else if (levelPriority[rawLevel] > levelPriority[entry.level]) {
-            // Upgrading to higher threat - reset count
-            entry.level = rawLevel;
-            entry.count = 1;
+            // Same level as before — check elapsed time since first seen
         } else {
-            // Downgrading within TA/RA - reset count
+            // Level changed (upgrade or downgrade) — restart the timer
             entry.level = rawLevel;
-            entry.count = 1;
+            entry.startTime = currentTimeMs;
         }
 
+        // Elapsed seconds since this threat level was first seen
+        const elapsedMs = currentTimeMs - entry.startTime;
+
         // Only return TA/RA if persistence threshold met (0 = disabled)
-        if (threshold === 0 || entry.count >= threshold) {
+        if (threshold === 0 || elapsedMs >= threshold * 1000) {
             // Mark the time this TA was first confirmed (for hold duration)
             if (!entry.confirmedTime) {
                 entry.confirmedTime = currentTimeMs;
             }
             return rawLevel;
         } else {
-            // Not enough consecutive samples - show PA instead of TA
+            // Not enough elapsed time — show PA instead of TA
             return 'PA';
         }
     } else {
@@ -523,9 +520,29 @@ function applyThreatPersistence(targetId, rawLevel, currentTimeMs) {
         }
 
         // Hold expired or never confirmed - allow downgrade
-        entry.level = rawLevel;
-        entry.count = 1;
         entry.confirmedTime = 0;
+
+        // PA persistence: require paThreshold seconds before showing PA
+        const paThreshold = threatPersistence.paThreshold;
+        if (rawLevel === 'PA') {
+            if (entry.level === 'PA') {
+                // Same level — check elapsed time since first seen
+            } else {
+                // Just entered PA — start timer
+                entry.level = 'PA';
+                entry.startTime = currentTimeMs;
+            }
+            const elapsedMs = currentTimeMs - entry.startTime;
+            if (paThreshold === 0 || elapsedMs >= paThreshold * 1000) {
+                return 'PA';
+            } else {
+                return 'OTHER';
+            }
+        }
+
+        // OTHER — reset tracking
+        entry.level = rawLevel;
+        entry.startTime = 0;
         return rawLevel;
     }
 }
@@ -556,9 +573,9 @@ function applyDivergenceTest(targetId, persistedLevel, closureRate, vertClosureR
 
     // Only apply to TA-level targets when feature is enabled
     if (!CDTI_CONFIG.divergenceTestEnabled || persistedLevel !== 'TA') {
-        // Reset divergence count if target is no longer TA
+        // Reset divergence tracking if target is no longer TA
         if (divergenceTracking.history[targetId]) {
-            divergenceTracking.history[targetId].count = 0;
+            divergenceTracking.history[targetId].startTime = 0;
         }
         return result;
     }
@@ -576,22 +593,28 @@ function applyDivergenceTest(targetId, persistedLevel, closureRate, vertClosureR
     // Get or create history entry
     const history = divergenceTracking.history;
     if (!history[targetId]) {
-        history[targetId] = { count: 0, lastTime: currentTimeMs };
+        history[targetId] = { startTime: 0, lastTime: currentTimeMs };
     }
     const entry = history[targetId];
     entry.lastTime = currentTimeMs;
 
     if (isDiverging) {
-        entry.count++;
+        // Start timer on first diverging call, keep it on subsequent ones
+        if (!entry.startTime) {
+            entry.startTime = currentTimeMs;
+        }
     } else {
-        // Reset — must be N CONSECUTIVE seconds
-        entry.count = 0;
+        // Reset — must be N CONSECUTIVE seconds of divergence
+        entry.startTime = 0;
     }
-    result.divergenceCount = entry.count;
 
-    // Check threshold
+    // Elapsed seconds of consecutive divergence
+    const elapsedMs = entry.startTime ? (currentTimeMs - entry.startTime) : 0;
+    result.divergenceCount = entry.startTime ? Math.floor(elapsedMs / 1000) : 0;
+
+    // Check threshold (seconds)
     const threshold = CDTI_CONFIG.divergenceThreshold;
-    if (threshold > 0 && entry.count >= threshold) {
+    if (threshold > 0 && elapsedMs >= threshold * 1000) {
         // Suppress TA -> downgrade to PA
         result.level = 'PA';
         result.suppressed = true;
@@ -745,32 +768,39 @@ function buildTAAlertMessage(relX, relY, ownHeading, relAltFt, distanceNm) {
 
 /**
  * Update the TA alert text box display
- * @param {string|null} message - Alert message to display, or null to hide
+ * Once shown, text stays on screen for 5 seconds regardless of TA state.
+ * Text content is also locked for that duration to prevent flicker.
+ * @param {string|null} message - Alert message to display, or null if no active TA
  * @param {number} currentTimeMs - Current simulation time in milliseconds
  */
+const TA_TEXT_DISPLAY_MS = 5000;  // Text box visible duration (seconds)
+
 function updateTAAlertDisplay(message, currentTimeMs) {
     if (!cdtiTAAlertBox) return;
-
-    const persistenceMs = threatPersistence.holdDuration;  // Sync with DO-317B TA hold duration
 
     // Detect backwards scrolling (rewinding) - hide alert immediately
     if (currentTimeMs < lastTAAlertTime) {
         cdtiTAAlertBox.style.display = 'none';
         lastTAAlertTime = 0;
+        lastTAMessageLockTime = 0;
+        return;
+    }
+
+    // If within the 5-second display window, keep showing — don't touch anything
+    if (lastTAMessageLockTime > 0 && currentTimeMs - lastTAMessageLockTime < TA_TEXT_DISPLAY_MS) {
         return;
     }
 
     if (message) {
-        // Active TA - show the alert
+        // New or refreshed TA — set text and start 5-second display window
         cdtiTAAlertBox.textContent = message;
         cdtiTAAlertBox.style.display = 'block';
+        lastTAMessageLockTime = currentTimeMs;
         lastTAAlertTime = currentTimeMs;
-    } else if (currentTimeMs - lastTAAlertTime < persistenceMs) {
-        // No active TA but within persistence window - keep showing
-        // (message remains unchanged from last update)
     } else {
-        // No TA and persistence expired - hide
+        // No active TA and display window expired — hide
         cdtiTAAlertBox.style.display = 'none';
+        lastTAMessageLockTime = 0;
     }
 }
 
@@ -782,6 +812,7 @@ function speakTAAlert(message) {
     if (!message || typeof window === 'undefined') return;
     if (!('speechSynthesis' in window)) return;
     const utterance = new SpeechSynthesisUtterance(message);
+    utterance.rate = 0.85;
     window.speechSynthesis.speak(utterance);
 }
 
@@ -968,6 +999,7 @@ function drawCDTI() {
         divergenceTracking.history = {};
         altitudeSmoothing.history = {};
         lastTAAlertTime = 0;
+        lastTAMessageLockTime = 0;
         lastTAAudioTime = 0;
         lastTAIds = new Set();
         if (typeof window !== 'undefined' && window.speechSynthesis) {
@@ -1013,7 +1045,6 @@ function drawCDTI() {
             currentTimeMs
         );
         const threatLevel = divergenceResult.level;
-
         // Handle out-of-range traffic
         if (distance > maxRange) {
             // Only show RA and TA at compass edge (half symbols)
@@ -1169,8 +1200,9 @@ function drawCDTI() {
         ctx.fillText(utcStr, center, size - 8);
     }
 
-    // Update TA aural alert text display
-    if (activeTAs.length > 0) {
+    // Update TA aural alert text display (same HAT inhibit as audio alerts)
+    const ownshipHAT = ownship.alt - CDTI_CONFIG.kvgtElevation;
+    if (activeTAs.length > 0 && ownshipHAT >= 500) {
         // Sort by distance (closest first)
         activeTAs.sort((a, b) => a.distance - b.distance);
         const closest = activeTAs[0];
@@ -2661,6 +2693,7 @@ export function removeCDTI() {
     if (cdtiOverlay) cdtiOverlay.remove();
     cdtiTAAlertBox = null;
     lastTAAlertTime = 0;
+    lastTAMessageLockTime = 0;
     lastTAAudioTime = 0;
     lastTAIds = new Set();
     lastProcessedTimeMs = 0;

@@ -357,7 +357,7 @@ function switchTranscript(transcriptKey) {
         updateTranscriptDisplay(currentTime);
     }
 
-    console.log(`Switched to transcript: ${TRANSCRIPT_CONFIGS[transcriptKey].name}`);
+    // console.log(`Switched to transcript: ${TRANSCRIPT_CONFIGS[transcriptKey].name}`);
 }
 
 /**
@@ -615,7 +615,7 @@ export async function setupTranscriptSync(viewer, srtPath, audioStartTime) {
             try {
                 const data = await loadSRT(config.path);
                 transcripts[key] = data;
-                console.log(`✅ Loaded ${data.length} entries from ${config.name}`);
+                // console.log(`✅ Loaded ${data.length} entries from ${config.name}`);
             } catch (err) {
                 console.error(`❌ Error loading ${config.name}:`, err);
                 transcripts[key] = [];
@@ -637,7 +637,7 @@ export async function setupTranscriptSync(viewer, srtPath, audioStartTime) {
             updateTranscriptDisplay(currentTime);
         });
 
-        console.log('✅ Transcript sync initialized with multiple frequencies');
+        // console.log('✅ Transcript sync initialized with multiple frequencies');
 
     } catch (error) {
         console.error('❌ Error initializing transcript system:', error);

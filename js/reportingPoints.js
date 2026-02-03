@@ -57,27 +57,26 @@ const REFERENCE_POINTS = [
         lat:  36.210167, 
         lon: -115.189259},
 
-    {   name: "N97CX Wreckage", 
-        lat:  36.205332, 
-        lon: -115.186376},
-
-    {   name: "N160RA Wreckage", 
-        lat:  36.203256, 
-        lon: -115.184910},
+    {   name: "N97CX @ 19:02:04", 
+        lat: 36.2015623375471, 
+        lon: -115.200868297736},
 
     {   name: "Lauer 'X'", 
         lat: 36.185481, 
         lon: -115.183500},
 
-    {   name: "N97CX @ 19:02:04", 
-        lat: 36.2015623375471, 
-        lon: -115.200868297736},
+    {   name: "N160RA Wreckage", 
+        lat:  36.203256, 
+        lon: -115.184910},
 
-    {    name: "North LAS Fire Station 53", 
-        lat: 36.225268, 
-        lon: -115.179007}
-
+    {   name: "N97CX Wreckage", 
+        lat:  36.205332, 
+        lon: -115.186376},
 ];
+
+    // {    name: "North LAS Fire Station 53", 
+    //     lat: 36.225268, 
+    //     lon: -115.179007}
 
 // ===========================================================
 //  GREAT-CIRCLE DESTINATION FROM ATCT (bearing + NM)
@@ -285,7 +284,7 @@ function createLauerBearingLine() {
         }
     });
 
-    console.log(`Lauer bearing line: ${bearingDeg.toFixed(1)}°, ${distanceToLauerNM.toFixed(2)} NM to Lauer X, extended to ${totalDistanceNM.toFixed(2)} NM`);
+    // console.log(`Lauer bearing line: ${bearingDeg.toFixed(1)}°, ${distanceToLauerNM.toFixed(2)} NM to Lauer X, extended to ${totalDistanceNM.toFixed(2)} NM`);
 }
 
 function setLauerBearingLineVisible(show) {
@@ -322,7 +321,7 @@ async function createLauerVerticalPole() {
         }
     });
 
-    console.log(`Lauer vertical pole: ground ${(groundHeight * 3.28084).toFixed(0)} ft to 3,500 ft MSL`);
+    // console.log(`Lauer vertical pole: ground ${(groundHeight * 3.28084).toFixed(0)} ft to 3,500 ft MSL`);
 }
 
 function setLauerVerticalPoleVisible(show) {

@@ -120,7 +120,7 @@ export function setupFalconLimits(viewer, options = {}) {
         falconEntity.show = visible;
     }
     
-    console.log(`FALCON limits initialized: ${FALCON_WIDTH_NM.toFixed(1)} nm x ${FALCON_HEIGHT_NM.toFixed(1)} nm centered on ATCT`);
+    // console.log(`FALCON limits initialized: ${FALCON_WIDTH_NM.toFixed(1)} nm x ${FALCON_HEIGHT_NM.toFixed(1)} nm centered on ATCT`);
     
     return falconEntity;
 }

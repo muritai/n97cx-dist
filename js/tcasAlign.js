@@ -63,7 +63,7 @@ function getN97CXTrack() {
     
     const track = calculateBearing(previousLat, previousLon, currentLat, currentLon);
     
-    console.log(`📡 TCAS Align: N97CX track = ${track.toFixed(1)}°`);
+    // console.log(`📡 TCAS Align: N97CX track = ${track.toFixed(1)}°`);
     return track;
 }
 
@@ -95,7 +95,7 @@ function alignToTCAS() {
         }
     });
     
-    console.log(`📡 TCAS Align: Camera aligned to track ${track.toFixed(1)}°`);
+    // console.log(`📡 TCAS Align: Camera aligned to track ${track.toFixed(1)}°`);
 }
 
 /**
@@ -117,7 +117,7 @@ export function setupTCASAlign(viewer, positionFn) {
     alignButton.onclick = alignToTCAS;
     document.body.appendChild(alignButton);
     
-    console.log('📡 TCAS Align initialized');
+    // console.log('📡 TCAS Align initialized');
 }
 
 /**

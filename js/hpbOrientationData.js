@@ -141,12 +141,12 @@ export async function loadHPBData(aircraftId) {
             data.sort((a, b) => Cesium.JulianDate.compare(a.julianTime, b.julianTime));
 
             orientationData[aircraftId] = data;
-            console.log(`✅ Loaded ${data.length} HPB samples for ${aircraftId}`);
+            // console.log(`✅ Loaded ${data.length} HPB samples for ${aircraftId}`);
 
             if (data.length > 0) {
                 const first = data[0];
                 const last = data[data.length - 1];
-                console.log(`   Time range: ${Cesium.JulianDate.toIso8601(first.julianTime)} to ${Cesium.JulianDate.toIso8601(last.julianTime)}`);
+                // console.log(`   Time range: ${Cesium.JulianDate.toIso8601(first.julianTime)} to ${Cesium.JulianDate.toIso8601(last.julianTime)}`);
             }
 
             return data;

@@ -30,7 +30,7 @@ export function setupHistoricalMeasurement(cesiumViewer, towerLat, towerLon, tow
     // Set up click handler
     setupClickHandler();
     
-    console.log('✅ Historical measurement system initialized');
+    // console.log('✅ Historical measurement system initialized');
 }
 
 /**
@@ -75,8 +75,8 @@ async function loadHistoricalData(csvPath) {
         const altIdx = trimmedHeaders.indexOf('corrected_alt');  // Pre-corrected MSL altitude
         const gsIdx = trimmedHeaders.indexOf('sm_gs');
 
-        console.log('Headers found:', trimmedHeaders);
-        console.log('Column indices:', { timeIdx, latIdx, lonIdx, altIdx, gsIdx });
+        // console.log('Headers found:', trimmedHeaders);
+        // console.log('Column indices:', { timeIdx, latIdx, lonIdx, altIdx, gsIdx });
         if (timeIdx === -1 || latIdx === -1 || lonIdx === -1) {
             console.error('❌ Missing required columns (lat/lon/time) in historical data');
             return;
@@ -119,7 +119,7 @@ async function loadHistoricalData(csvPath) {
         }
         
         currentHistoricalData = data;
-        console.log(`📊 Loaded ${data.length} points for ${currentHistoricalPath}`);
+        // console.log(`📊 Loaded ${data.length} points for ${currentHistoricalPath}`);
         
     } catch (error) {
         console.error('❌ Error loading historical data:', error);
@@ -298,7 +298,7 @@ function createMeasurement(dataPoint, entityId) {
         data: dataPoint
     };
     
-    console.log(`📍 Measurement: ${labelText}`);
+    // console.log(`📍 Measurement: ${labelText}`);
 }
 
 /**

@@ -65,7 +65,7 @@ async function loadGroundspeedData(droneID) {
             };
         }).filter(entry => entry !== null && !isNaN(entry.value));
         
-        console.log(`✅ GS data loaded for ${droneID}: ${groundspeedData[droneID].length} samples`);
+        // console.log(`✅ GS data loaded for ${droneID}: ${groundspeedData[droneID].length} samples`);
     } catch (error) {
         console.warn(`⚠️ Error loading GS data for ${droneID}:`, error.message);
     }
@@ -141,7 +141,7 @@ async function loadCASData(droneID) {
             });
         }
 
-        console.log(`✅ CAS data loaded for ${droneID}: ${casData[droneID].length} samples`);
+        // console.log(`✅ CAS data loaded for ${droneID}: ${casData[droneID].length} samples`);
     } catch (error) {
         console.warn(`⚠️ Error loading CAS data for ${droneID}:`, error.message);
     }
@@ -196,7 +196,7 @@ async function loadBankData(droneID) {
             };
         }).filter(entry => entry !== null && !isNaN(entry.value));
 
-        console.log(`✅ Bank data loaded for ${droneID}: ${bankData[droneID].length} samples`);
+        // console.log(`✅ Bank data loaded for ${droneID}: ${bankData[droneID].length} samples`);
     } catch (error) {
         console.warn(`⚠️ Error loading bank data for ${droneID}:`, error.message);
     }
@@ -235,7 +235,7 @@ export function getLabelMode() {
 function cycleLabeMode() {
     currentLabelMode = (currentLabelMode + 1) % LABEL_MODES.length;
     updateButtonText();
-    console.log(`🏷️ Label mode: ${LABEL_MODES[currentLabelMode]}`);
+    // console.log(`🏷️ Label mode: ${LABEL_MODES[currentLabelMode]}`);
 }
 
 /**
@@ -315,11 +315,11 @@ export async function setupLabelMode(viewer, droneIDs = []) {
     document.body.appendChild(labelModeButton);
 
     // Load groundspeed data for all specified drones
-    console.log(`🏷️ Loading GS data for ${droneIDs.length} drones...`);
+    // console.log(`🏷️ Loading GS data for ${droneIDs.length} drones...`);
     await Promise.all(droneIDs.map(id => loadGroundspeedData(id)));
 
     // Load CAS and bank data for N97CX and N160RA
-    console.log(`🏷️ Loading CAS and bank data for N97CX and N160RA...`);
+    // console.log(`🏷️ Loading CAS and bank data for N97CX and N160RA...`);
     await Promise.all([
         loadCASData('N97CX'),
         loadCASData('N160RA'),
@@ -327,7 +327,7 @@ export async function setupLabelMode(viewer, droneIDs = []) {
         loadBankData('N160RA')
     ]);
 
-    console.log(`🏷️ Label mode system initialized (mode: ${LABEL_MODES[currentLabelMode]})`);
+    // console.log(`🏷️ Label mode system initialized (mode: ${LABEL_MODES[currentLabelMode]})`);
 }
 
 /**

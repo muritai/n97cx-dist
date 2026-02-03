@@ -149,6 +149,10 @@ const CDTI_CONFIG = {
     motionVectorDuration: 60,      // seconds (30, 60, 120, 300)
     // Directional arrow configuration (G500 Table 4-21)
     showDirectionalArrows: true,   // Show heading arrows inside traffic symbols
+    // DO-317B Divergence Test configuration
+    divergenceTestEnabled: true,       // Enable TA suppression when target is diverging
+    divergenceThreshold: 3,            // Consecutive seconds of divergence required to suppress TA
+    divergenceMode: 'HORIZONTAL',      // 'HORIZONTAL' (closureRate < 0) or 'COMBINED' (horiz AND vert)
 };
 
 // KVGT Runway definitions (threshold coords from FAA data - converted from DMS)
@@ -189,12 +193,21 @@ let getAircraftDataFn = null;  // Function to get all aircraft positions
 let lastTAAlertTime = 0;        // Timestamp of last TA alert (for persistence)
 let lastTAAudioTime = 0;        // Timestamp of last TA audio processing (rewind guard)
 let lastTAIds = new Set();      // Track active TA targets to dedupe spoken alerts
+let lastProcessedTimeMs = 0;    // Rewind detection: last simulation time processed
 
 // Threat persistence tracking (sequential verification per DO-317B)
 // Tracks consecutive seconds each target has met TA criteria
 const threatPersistence = {
-    history: {},        // { targetId: { level: 'TA', count: 2, lastTime: julianDate } }
+    history: {},        // { targetId: { level, count, lastTime, confirmedTime } }
     threshold: 2,       // Seconds required before upgrading to TA (0 = disabled)
+    holdDuration: 6000, // ms - minimum TA display time per DO-317B (6 seconds)
+    maxAge: 10000,      // ms - remove stale entries older than this
+};
+
+// Divergence tracking (DO-317B divergence test)
+// Tracks consecutive seconds a TA-level target has been diverging
+const divergenceTracking = {
+    history: {},        // { targetId: { count: N, lastTime: ms } }
     maxAge: 5000,       // ms - remove stale entries older than this
 };
 
@@ -280,9 +293,12 @@ function calculateClosure(ownship, target, distanceNm, relPos, relAltFt) {
     }
 
     // ========== VERTICAL CLOSURE ==========
-    // Vertical closure rate = -(target_Vz - ownship_Vz)
-    // Positive = aircraft converging vertically, Negative = diverging
-    const vertClosureRate = -(tgtVz - ownVz);  // fpm
+    // Vertical closure rate: positive = altitude separation decreasing (converging)
+    // Must account for whether target is above or below ownship:
+    //   Target above (relAltFt > 0): converging when ownVz > tgtVz (we rise or they descend)
+    //   Target below (relAltFt < 0): converging when tgtVz > ownVz (they rise or we descend)
+    //   Co-altitude (relAltFt == 0): no separation to close
+    const vertClosureRate = -Math.sign(relAltFt) * (tgtVz - ownVz);  // fpm
 
     let vertTauSeconds = Infinity;
     const altSeparation = Math.abs(relAltFt);
@@ -392,18 +408,22 @@ function classifyThreat(distanceNm, relAltFt, closureInfo = null, ownshipAlt = n
     const inTADistanceZone = distanceNm <= protectedVolume && absRelAlt <= altThreshold;
 
     // Condition 2: TAU-based using sensitivity level's tau threshold
-    // Modified tau uses min(horizontal, vertical) when converging vertically
+    // Horizontal tau with altitude gate
     const horizTauTriggered = CDTI_CONFIG.tauEnabled &&
                               horizTauSeconds <= tauThreshold &&
                               absRelAlt <= altThreshold;
 
-    // Vertical tau trigger: converging vertically and within time threshold
+    // Vertical tau: converging vertically and within time threshold
     const vertTauTriggered = CDTI_CONFIG.tauEnabled &&
                              vertClosureRate > 0 &&
                              vertTauSeconds <= tauThreshold;
 
-    // Combined: either horizontal or vertical tau triggered
-    const tauTriggered = horizTauTriggered || vertTauTriggered;
+    // Combined: TCAS requires both horizontal AND vertical proximity.
+    // Vertical tau alone is not sufficient — it acts as a vertical gate
+    // when horizontal tau is also within threshold, preventing false TAs
+    // on vertically converging traffic that is far away horizontally.
+    const tauTriggered = horizTauTriggered ||
+                         (vertTauTriggered && horizTauSeconds <= tauThreshold);
 
     if (inTADistanceZone || tauTriggered) {
         result.level = 'TA';
@@ -444,6 +464,7 @@ function classifyThreat(distanceNm, relAltFt, closureInfo = null, ownshipAlt = n
 function applyThreatPersistence(targetId, rawLevel, currentTimeMs) {
     const history = threatPersistence.history;
     const threshold = threatPersistence.threshold;
+    const holdDuration = threatPersistence.holdDuration;
 
     // Clean up stale entries periodically
     if (Math.random() < 0.01) {  // 1% chance each call
@@ -457,7 +478,7 @@ function applyThreatPersistence(targetId, rawLevel, currentTimeMs) {
 
     // Get or create history entry for this target
     if (!history[targetId]) {
-        history[targetId] = { level: 'OTHER', count: 0, lastTime: currentTimeMs };
+        history[targetId] = { level: 'OTHER', count: 0, lastTime: currentTimeMs, confirmedTime: 0 };
     }
     const entry = history[targetId];
 
@@ -467,7 +488,7 @@ function applyThreatPersistence(targetId, rawLevel, currentTimeMs) {
     // Threat level priority for comparison
     const levelPriority = { 'OTHER': 0, 'PA': 1, 'TA': 2, 'RA': 3 };
 
-    // If raw level is TA (or RA), check persistence
+    // If raw level is TA (or RA), check upgrade persistence
     if (rawLevel === 'TA' || rawLevel === 'RA') {
         if (entry.level === rawLevel) {
             // Same level as before - increment count
@@ -477,24 +498,116 @@ function applyThreatPersistence(targetId, rawLevel, currentTimeMs) {
             entry.level = rawLevel;
             entry.count = 1;
         } else {
-            // Downgrading - immediate (no hysteresis for now)
+            // Downgrading within TA/RA - reset count
             entry.level = rawLevel;
             entry.count = 1;
         }
 
         // Only return TA/RA if persistence threshold met (0 = disabled)
         if (threshold === 0 || entry.count >= threshold) {
+            // Mark the time this TA was first confirmed (for hold duration)
+            if (!entry.confirmedTime) {
+                entry.confirmedTime = currentTimeMs;
+            }
             return rawLevel;
         } else {
             // Not enough consecutive samples - show PA instead of TA
             return 'PA';
         }
     } else {
-        // Raw level is PA or OTHER - immediate transition (no persistence needed)
+        // Raw level dropped below TA (now PA or OTHER)
+        // DO-317B hold: maintain TA for holdDuration after it was confirmed
+        if (entry.confirmedTime > 0 && (currentTimeMs - entry.confirmedTime) < holdDuration) {
+            // Still within hold window - keep showing TA
+            return 'TA';
+        }
+
+        // Hold expired or never confirmed - allow downgrade
         entry.level = rawLevel;
         entry.count = 1;
+        entry.confirmedTime = 0;
         return rawLevel;
     }
+}
+
+/**
+ * Apply DO-317B divergence test to suppress nuisance TAs
+ * If a target classified as TA has been diverging for N consecutive
+ * seconds, downgrade the alert to PA.
+ *
+ * Divergence defined by CDTI_CONFIG.divergenceMode:
+ *   'HORIZONTAL': closureRate < 0 (target moving away horizontally)
+ *   'COMBINED':   closureRate < 0 AND vertClosureRate < 0 (both diverging)
+ *
+ * @param {string} targetId - Target aircraft identifier
+ * @param {string} persistedLevel - Threat level after persistence filter
+ * @param {number} closureRate - Horizontal closure rate in kts (negative = diverging)
+ * @param {number} vertClosureRate - Vertical closure rate in fpm (negative = diverging)
+ * @param {number} currentTimeMs - Current simulation time in milliseconds
+ * @returns {Object} { level, isDiverging, divergenceCount, suppressed }
+ */
+function applyDivergenceTest(targetId, persistedLevel, closureRate, vertClosureRate, currentTimeMs) {
+    const result = {
+        level: persistedLevel,
+        isDiverging: false,
+        divergenceCount: 0,
+        suppressed: false
+    };
+
+    // Only apply to TA-level targets when feature is enabled
+    if (!CDTI_CONFIG.divergenceTestEnabled || persistedLevel !== 'TA') {
+        // Reset divergence count if target is no longer TA
+        if (divergenceTracking.history[targetId]) {
+            divergenceTracking.history[targetId].count = 0;
+        }
+        return result;
+    }
+
+    // Determine if target is currently diverging
+    let isDiverging = false;
+    if (CDTI_CONFIG.divergenceMode === 'COMBINED') {
+        isDiverging = (closureRate < 0) && (vertClosureRate < 0);
+    } else {
+        // Default: HORIZONTAL only
+        isDiverging = (closureRate < 0);
+    }
+    result.isDiverging = isDiverging;
+
+    // Get or create history entry
+    const history = divergenceTracking.history;
+    if (!history[targetId]) {
+        history[targetId] = { count: 0, lastTime: currentTimeMs };
+    }
+    const entry = history[targetId];
+    entry.lastTime = currentTimeMs;
+
+    if (isDiverging) {
+        entry.count++;
+    } else {
+        // Reset — must be N CONSECUTIVE seconds
+        entry.count = 0;
+    }
+    result.divergenceCount = entry.count;
+
+    // Check threshold
+    const threshold = CDTI_CONFIG.divergenceThreshold;
+    if (threshold > 0 && entry.count >= threshold) {
+        // Suppress TA -> downgrade to PA
+        result.level = 'PA';
+        result.suppressed = true;
+    }
+
+    // Periodic cleanup of stale entries
+    if (Math.random() < 0.01) {
+        const cutoff = currentTimeMs - divergenceTracking.maxAge;
+        for (const id in history) {
+            if (history[id].lastTime < cutoff) {
+                delete history[id];
+            }
+        }
+    }
+
+    return result;
 }
 
 /**
@@ -586,15 +699,17 @@ function getVerticalPosition(relAltFt) {
 }
 
 /**
- * Bin distance to standard callout values: 0.3, 0.6, 1, 2 nm
+ * Bin distance to callout values
+ * Sub-mile: 0.3, 0.6 nm; then integer nm 1-16; cap at 16+
+ * Max tau-based TA range ~12nm (900kt head-on closure, 48s tau)
  * @param {number} distanceNm - Actual distance in nautical miles
  * @returns {string} Binned distance string
  */
 function binDistance(distanceNm) {
     if (distanceNm <= 0.3) return '0.3';
     if (distanceNm <= 0.6) return '0.6';
-    if (distanceNm <= 1.0) return '1';
-    return '2';
+    if (distanceNm > 16) return '16+';
+    return String(Math.round(distanceNm));
 }
 
 /**
@@ -636,7 +751,7 @@ function buildTAAlertMessage(relX, relY, ownHeading, relAltFt, distanceNm) {
 function updateTAAlertDisplay(message, currentTimeMs) {
     if (!cdtiTAAlertBox) return;
 
-    const persistenceMs = 2000;  // Keep alert visible for 2 seconds after TA clears
+    const persistenceMs = threatPersistence.holdDuration;  // Sync with DO-317B TA hold duration
 
     // Detect backwards scrolling (rewinding) - hide alert immediately
     if (currentTimeMs < lastTAAlertTime) {
@@ -672,12 +787,18 @@ function speakTAAlert(message) {
 
 /**
  * Update TA spoken alerts (fire once per new TA target)
+ * Per Garmin G500 Pilot's Guide: aural alerts inhibited below 500 ft HAT
  * @param {Map<string, Object>} taTargetsById - Map of targetId -> { rel, relAltFt, distance }
  * @param {number} ownHeading - Ownship heading in degrees
  * @param {number} currentTimeMs - Current simulation time in milliseconds
+ * @param {number} ownshipAltMSL - Ownship altitude in feet MSL
  */
-function updateTAAudioAlerts(taTargetsById, ownHeading, currentTimeMs) {
+function updateTAAudioAlerts(taTargetsById, ownHeading, currentTimeMs, ownshipAltMSL) {
     if (!taTargetsById) return;
+
+    // Garmin G500: aural TA alerts inhibited below 500 ft HAT
+    const hat = ownshipAltMSL - CDTI_CONFIG.kvgtElevation;
+    if (hat < 500) return;
 
     // Detect backwards scrolling (rewinding) - clear audio state immediately
     if (currentTimeMs < lastTAAudioTime) {
@@ -792,9 +913,6 @@ function drawCDTI() {
     
     const ownHeading = ownship.heading || 0;
     
-    // Debug: log heading
-    console.log(`CDTI: N97CX heading = ${ownHeading.toFixed(1)}°`);
-    
     // Clear canvas
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, size, size);
@@ -844,6 +962,20 @@ function drawCDTI() {
     // Get current time for smoothing and persistence
     const currentTimeMs = Cesium.JulianDate.toDate(currentTime).getTime();
 
+    // Rewind detection: if time went backwards, flush all stateful tracking
+    if (currentTimeMs < lastProcessedTimeMs) {
+        threatPersistence.history = {};
+        divergenceTracking.history = {};
+        altitudeSmoothing.history = {};
+        lastTAAlertTime = 0;
+        lastTAAudioTime = 0;
+        lastTAIds = new Set();
+        if (typeof window !== 'undefined' && window.speechSynthesis) {
+            window.speechSynthesis.cancel();
+        }
+    }
+    lastProcessedTimeMs = currentTimeMs;
+
     // Smooth ownship altitude (3-point moving average)
     const ownshipAltSmoothed = smoothAltitude(ownship.id, ownship.alt, currentTimeMs);
 
@@ -872,7 +1004,15 @@ function drawCDTI() {
 
         // Apply sequential verification (persistence filtering) per DO-317B
         // Requires N consecutive seconds meeting TA criteria before triggering
-        const threatLevel = applyThreatPersistence(aircraft.id, threatResult.level, currentTimeMs);
+        const persistedLevel = applyThreatPersistence(aircraft.id, threatResult.level, currentTimeMs);
+
+        // DO-317B divergence test: suppress TA if target diverging for N consecutive seconds
+        const divergenceResult = applyDivergenceTest(
+            aircraft.id, persistedLevel,
+            closureInfo.closureRate, closureInfo.vertClosureRate,
+            currentTimeMs
+        );
+        const threatLevel = divergenceResult.level;
 
         // Handle out-of-range traffic
         if (distance > maxRange) {
@@ -1048,7 +1188,7 @@ function drawCDTI() {
     }
 
     // Update TA spoken alerts (per new TA target)
-    updateTAAudioAlerts(taTargetsById, ownHeading, currentTimeMs);
+    updateTAAudioAlerts(taTargetsById, ownHeading, currentTimeMs, ownship.alt);
 }
 
 /**
@@ -1115,9 +1255,6 @@ function drawRunways(ctx, ownLat, ownLon, ownHeading, scale, center, maxRange) {
         
         // Calculate runway true bearing (before any rotation)
         const rwyBearing = Math.atan2(end.x - start.x, end.y - start.y) * 180 / Math.PI;
-        
-        // Debug
-        console.log(`CDTI Runway ${rwy.name}: true bearing = ${rwyBearing.toFixed(1)}°`);
         
         // Check if runway is in view
         const startDist = Math.sqrt(start.x * start.x + start.y * start.y);
@@ -2202,11 +2339,12 @@ function exportCDTIData() {
         return;
     }
 
-    console.log('CDTI Export: Starting batch export...');
+    // console.log('CDTI Export: Starting batch export...');
     const startTime = performance.now();
 
-    // Clear persistence and smoothing history for fresh export run
+    // Clear persistence, divergence, and smoothing history for fresh export run
     threatPersistence.history = {};
+    divergenceTracking.history = {};
     altitudeSmoothing.history = {};
 
     // Get time range from viewer clock
@@ -2214,7 +2352,7 @@ function exportCDTIData() {
     const clockStop = viewerRef.clock.stopTime;
     const totalSeconds = Cesium.JulianDate.secondsDifference(clockStop, clockStart);
 
-    console.log(`CDTI Export: Time range = ${totalSeconds.toFixed(1)} seconds`);
+    // console.log(`CDTI Export: Time range = ${totalSeconds.toFixed(1)} seconds`);
 
     // Batch export data
     const exportLog = [];
@@ -2258,8 +2396,15 @@ function exportCDTIData() {
             const rawLevel = threatResult.level;
 
             // Apply sequential verification (persistence filtering)
-            const currentTimeMs = Cesium.JulianDate.toDate(currentTime).getTime();
             const filteredLevel = applyThreatPersistence(aircraft.id, rawLevel, currentTimeMs);
+
+            // DO-317B divergence test
+            const divergenceResult = applyDivergenceTest(
+                aircraft.id, filteredLevel,
+                closureInfo.closureRate, closureInfo.vertClosureRate,
+                currentTimeMs
+            );
+            const finalLevel = divergenceResult.level;
 
             // Only log RA, TA, PA (not OTHER) - use raw level for logging
             if (rawLevel === 'OTHER') return;
@@ -2322,13 +2467,17 @@ function exportCDTIData() {
                 sensitivity_level: threatResult.sensitivityLevel,
                 sensitivity_phase: threatResult.sensitivityPhase,
                 sensitivity_source: threatResult.sensitivitySource,
-                velocity_source: threatResult.velocitySource
+                velocity_source: threatResult.velocitySource,
+                diverging: divergenceResult.isDiverging ? 1 : 0,
+                divergence_count: divergenceResult.divergenceCount,
+                divergence_suppressed: divergenceResult.suppressed ? 1 : 0,
+                threat_level_final: finalLevel
             });
         });
     }
 
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
-    console.log(`CDTI Export: Processed ${totalSeconds} seconds, found ${exportLog.length} alert events in ${elapsed}s`);
+    // console.log(`CDTI Export: Processed ${totalSeconds} seconds, found ${exportLog.length} alert events in ${elapsed}s`);
 
     if (exportLog.length === 0) {
         alert('No RA/TA/PA events found in the time range.');
@@ -2382,7 +2531,11 @@ function exportToCSV(data) {
         'sensitivity_level',
         'sensitivity_phase',
         'sensitivity_source',
-        'velocity_source'
+        'velocity_source',
+        'diverging',
+        'divergence_count',
+        'divergence_suppressed',
+        'threat_level_final'
     ];
 
     // Excel-friendly headers (for second row)
@@ -2424,7 +2577,11 @@ function exportToCSV(data) {
         'Sensitivity Level',
         'Sensitivity Phase',
         'Sensitivity Source',
-        'Velocity Source'
+        'Velocity Source',
+        'Diverging',
+        'Divergence Count',
+        'Divergence Suppressed',
+        'Threat Level Final'
     ];
 
     let csv = headers.join(',') + '\n';
@@ -2455,7 +2612,7 @@ function exportToCSV(data) {
     link.click();
     document.body.removeChild(link);
 
-    console.log(`CDTI Export: CSV downloaded with ${data.length} events`);
+    // console.log(`CDTI Export: CSV downloaded with ${data.length} events`);
 }
 
 /**
@@ -2491,7 +2648,7 @@ export function setupCDTI(viewer, getAircraftData) {
     // Create overlay
     createCDTIOverlay();
 
-    console.log('📡 CDTI Display initialized');
+    // console.log('📡 CDTI Display initialized');
 }
 
 /**
@@ -2506,6 +2663,10 @@ export function removeCDTI() {
     lastTAAlertTime = 0;
     lastTAAudioTime = 0;
     lastTAIds = new Set();
+    lastProcessedTimeMs = 0;
+    threatPersistence.history = {};
+    divergenceTracking.history = {};
+    altitudeSmoothing.history = {};
     if (typeof window !== 'undefined' && window.speechSynthesis) {
         window.speechSynthesis.cancel();
     }

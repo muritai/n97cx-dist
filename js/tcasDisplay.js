@@ -225,7 +225,7 @@ function showDisplay() {
     // Record simulation time when display started
     displayStartSimSeconds = getCurrentTimeSeconds();
     
-    console.log(`📡 TCAS Display: Showing frame ${currentFrameIndex + 1}/${TCAS_FRAMES.length} @ ${frame.timeUTC}`);
+    // console.log(`📡 TCAS Display: Showing frame ${currentFrameIndex + 1}/${TCAS_FRAMES.length} @ ${frame.timeUTC}`);
 }
 
 /**
@@ -260,12 +260,12 @@ function updateTCAS() {
         // Dismiss if newer frame is available
         if (availableIndex > currentFrameIndex) {
             hideDisplay();
-            console.log(`📡 TCAS Display: Auto-dismissed, newer frame available`);
+            // console.log(`📡 TCAS Display: Auto-dismissed, newer frame available`);
         }
         // Dismiss if dwell time (simulation seconds) has elapsed
         else if (currentSeconds - displayStartSimSeconds >= DWELL_TIME_SIM_SECONDS) {
             hideDisplay();
-            console.log(`📡 TCAS Display: Auto-dismissed, dwell time expired`);
+            // console.log(`📡 TCAS Display: Auto-dismissed, dwell time expired`);
         }
     }
     
@@ -290,7 +290,7 @@ export function setupTCASDisplay(viewer) {
     tcasButton.style.zIndex = '1000';
     tcasButton.style.opacity = '.7';
     tcasButton.style.cursor = 'default';
-    console.log('📡 TCAS Button initial opacity:', tcasButton.style.opacity);
+    // console.log('📡 TCAS Button initial opacity:', tcasButton.style.opacity);
     tcasButton.onclick = () => {
         if (!tcasButton.disabled) {
             showDisplay();
@@ -307,7 +307,7 @@ export function setupTCASDisplay(viewer) {
     // Initial update
     updateTCAS();
     
-    console.log(`📡 TCAS Display initialized with ${TCAS_FRAMES.length} frames`);
+    // console.log(`📡 TCAS Display initialized with ${TCAS_FRAMES.length} frames`);
 }
 
 /**
@@ -331,5 +331,5 @@ export function removeTCASDisplay() {
  */
 export function setDwellTime(ms) {
     // Note: This only affects future displays
-    console.log(`📡 TCAS dwell time set to ${ms}ms`);
+    // console.log(`📡 TCAS dwell time set to ${ms}ms`);
 }

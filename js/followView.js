@@ -55,7 +55,7 @@ const FIXED_PITCH_DEG = 0;  // Level horizon for cockpit POV
 
 // Tail view: camera behind aircraft, looking at tail (medium chase)
 const TAIL_VIEW_BACK = 25.0;   // Meters behind aircraft
-const TAIL_VIEW_UP = -3.0;    // Meters above aircraft 
+const TAIL_VIEW_UP = 1.0;     // Meters above aircraft 
 const TAIL_VIEW_LEFT = 0.0;   // Centered behind
 
 // Store original FOV to restore later
@@ -87,7 +87,7 @@ export function getSmoothedFollowPosition() {
 
 function toggleFollowView() {
     followEnabled = !followEnabled;
-    console.log("TOGGLE followEnabled =", followEnabled);
+    // console.log("TOGGLE followEnabled =", followEnabled);
 
     if (followEnabled) {
         disableATCT(); // Cannot use both
@@ -117,16 +117,16 @@ function hideN97CXVisuals() {
     const drone = viewerRef.entities.getById(FOLLOW_TARGET);
     if (drone) {
         drone.show = false;
-        console.log("  Hidden drone entity");
+        // console.log("  Hidden drone entity");
     }
 
     // Keep 3D model visible for tail view (camera is behind aircraft)
     const model3DId = `${FOLLOW_TARGET}-3d-model`;
     const model3D = viewerRef.entities.getById(model3DId);
-    console.log(`  Looking for 3D model: ${model3DId}, found: ${!!model3D}`);
+    // console.log(`  Looking for 3D model: ${model3DId}, found: ${!!model3D}`);
     if (model3D) {
         model3D.show = true;  // Keep visible for tail view
-        console.log("  Showing 3D model for tail view");
+        // console.log("  Showing 3D model for tail view");
     }
 
     const historyLine = viewerRef.entities.getById(`history-${FOLLOW_TARGET}`);
@@ -139,7 +139,7 @@ function hideN97CXVisuals() {
         groundLine.show = false;
     }
 
-    console.log("👁️ N97CX visuals configured for tail view");
+    // console.log("👁️ N97CX visuals configured for tail view");
 }
 
 function showN97CXVisuals() {
@@ -164,7 +164,7 @@ function showN97CXVisuals() {
         groundLine.show = true;
     }
 
-    console.log("👁️ N97CX visuals restored");
+    // console.log("👁️ N97CX visuals restored");
 }
 
 // ================== ENABLE / DISABLE ==================
@@ -172,7 +172,7 @@ function showN97CXVisuals() {
 async function enableFollow() {
     // Load HPB data if not already loaded (needed for smooth heading/bank)
     if (!isHPBLoaded(FOLLOW_TARGET)) {
-        console.log(`Loading HPB data for ${FOLLOW_TARGET}...`);
+        // console.log(`Loading HPB data for ${FOLLOW_TARGET}...`);
         await loadHPBData(FOLLOW_TARGET);
     }
 
@@ -216,7 +216,7 @@ function disableFollow() {
         const model3D = viewerRef.entities.getById(`${FOLLOW_TARGET}-3d-model`);
         if (model3D) {
             model3D.position = originalModelPositionProperty;
-            console.log('Restored original position property for N97CX 3D model');
+            // console.log('Restored original position property for N97CX 3D model');
         }
         originalModelPositionProperty = null;
     }

@@ -11,7 +11,7 @@ export function setupMeasurements(viewer, atctLat, atctLon, debug = false) {
     let measureLabel = null;
 
 
-    console.log("✅ setupMeasurements called");
+    // console.log("✅ setupMeasurements called");
 
     if (!viewer) {
         console.error("❌ setupMeasurements: viewer is undefined!");
@@ -172,7 +172,7 @@ export function setupMeasurements(viewer, atctLat, atctLon, debug = false) {
             ringsVisible = false;
             ringBtn.textContent = "Show ATCT Range Rings";
             ringBtn.style.background = "";        // Remove gray background
-            console.log("❌ Range rings hidden");
+            // console.log("❌ Range rings hidden");
         } else {
             addRangeRings(lat, lon, nmList);
             ringsVisible = true;

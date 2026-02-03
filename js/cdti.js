@@ -8,28 +8,37 @@
 // ===========================================================
 
 // ===========================================================
-//                   RTCA STANDARD SYMBOLOGY
+//           GARMIN G500/600 ADS-B SYMBOLOGY (Table 7-4)
 // ===========================================================
-// Based on Sandel SN3500 Pilot's Guide - RTCA Standard
+// Based on Garmin G500/600 Pilot's Guide Rev H, Table 7-4
 //
-// Traffic Symbol Shapes:
-//   RA (Resolution Advisory): Filled red square
-//   TA (Traffic Advisory):    Filled yellow circle
-//   PA (Proximity Advisory):  Filled cyan diamond
-//   Other Traffic:            Open/hollow cyan diamond
+// Traffic Symbol Shapes (Directional = valid heading available):
+//   TA (Traffic Advisory):     Yellow circle (open if non-dir, with arrow if dir)
+//   Proximate Directional:     Filled cyan chevron/arrow
+//   Proximate Non-Directional: Filled cyan diamond
+//   Basic Directional:         Open cyan chevron/arrow
+//   Basic Non-Directional:     Open cyan diamond
+//   Surface Vehicle:           Brown square with tail
+//
+// Off-Scale Symbols (at display edge):
+//   Alerted: Half yellow circle
+//   Basic/Proximate: Chevron pointing down (toward center)
 //
 // Vertical Trend Arrows:
 //   Up arrow:   Climbing > 500 fpm
 //   Down arrow: Descending > 500 fpm
-//   No arrow:   Level or ≤ 500 fpm
+//   No arrow:   Level or <= 500 fpm
+//
+// NOTE: RTCA/TCAS symbols preserved in rtcaSymbols.js
 // ===========================================================
 
-// Colors per RTCA standard
+// Colors per Garmin G500/600 standard
 const CDTI_COLORS = {
-    RA: '#FF0000',      // Red - Resolution Advisory
+    RA: '#FF0000',      // Red - Resolution Advisory (TCAS II only, not GDL 88)
     TA: '#FFFF00',      // Yellow - Traffic Advisory
-    PA: '#00FFFF',      // Cyan - Proximity Advisory
-    OTHER: '#00FFFF',   // Cyan - Other Traffic (hollow)
+    PA: '#CCCCCC',      // Gray - Proximity Advisory (Proximate traffic)
+    OTHER: '#CCCCCC',   // Gray - Basic/Other Traffic
+    SURFACE: '#8B4513', // Brown (SaddleBrown) - Surface vehicles
     OWNSHIP: '#FFFFFF', // White - Ownship symbol
 };
 
@@ -172,10 +181,14 @@ let cdtiOverlay = null;
 let cdtiButton = null;
 let exportButton = null;
 let cdtiLegend = null;
+let cdtiTAAlertBox = null;      // TA aural alert text display element
 let isVisible = false;
 let isLegendVisible = false;
 let updateTimer = null;
 let getAircraftDataFn = null;  // Function to get all aircraft positions
+let lastTAAlertTime = 0;        // Timestamp of last TA alert (for persistence)
+let lastTAAudioTime = 0;        // Timestamp of last TA audio processing (rewind guard)
+let lastTAIds = new Set();      // Track active TA targets to dedupe spoken alerts
 
 // Threat persistence tracking (sequential verification per DO-317B)
 // Tracks consecutive seconds each target has met TA criteria
@@ -539,6 +552,169 @@ function passesAltitudeFilter(relAltFt) {
     return relAltFt >= filter.below && relAltFt <= filter.above;
 }
 
+// ===========================================================
+//           GDL 88 AURAL ALERT TEXT DISPLAY
+// ===========================================================
+// Per GDL 88 documentation, when a TA is generated, the system announces:
+// "Traffic! X O'clock, Low/High, X Miles"
+// These functions build the visual equivalent of that aural alert.
+
+/**
+ * Convert relative bearing to clock position (1-12)
+ * @param {number} relBearingDeg - Bearing relative to ownship heading in degrees
+ * @returns {number} Clock position (1-12)
+ */
+function bearingToClockPosition(relBearingDeg) {
+    // Normalize to 0-360
+    let bearing = ((relBearingDeg % 360) + 360) % 360;
+    // Convert to clock: 0° = 12, 30° = 1, 60° = 2, etc.
+    let clock = Math.round(bearing / 30);
+    if (clock === 0) clock = 12;
+    return clock;
+}
+
+/**
+ * Determine vertical position callout (Low, High, or omitted)
+ * Uses ±850ft threshold - within that range, no vertical callout
+ * @param {number} relAltFt - Relative altitude in feet (target - ownship)
+ * @returns {string|null} "Low", "High", or null if within ±850ft
+ */
+function getVerticalPosition(relAltFt) {
+    if (relAltFt > 850) return 'High';
+    if (relAltFt < -850) return 'Low';
+    return null;  // Within ±850ft - no vertical callout
+}
+
+/**
+ * Bin distance to standard callout values: 0.3, 0.6, 1, 2 nm
+ * @param {number} distanceNm - Actual distance in nautical miles
+ * @returns {string} Binned distance string
+ */
+function binDistance(distanceNm) {
+    if (distanceNm <= 0.3) return '0.3';
+    if (distanceNm <= 0.6) return '0.6';
+    if (distanceNm <= 1.0) return '1';
+    return '2';
+}
+
+/**
+ * Build the GDL 88 CSA aural alert message
+ * Format: "Traffic! X O'clock, [Low/High,] X Miles"
+ * Vertical callout omitted if within ±850ft
+ *
+ * @param {number} relX - Relative East position in nm
+ * @param {number} relY - Relative North position in nm
+ * @param {number} ownHeading - Ownship heading in degrees
+ * @param {number} relAltFt - Relative altitude in feet (target - ownship)
+ * @param {number} distanceNm - Distance in nautical miles
+ * @returns {string} Alert message
+ */
+function buildTAAlertMessage(relX, relY, ownHeading, relAltFt, distanceNm) {
+    // Calculate geographic bearing from ownship to traffic (from North)
+    const geoBearing = Math.atan2(relX, relY) * 180 / Math.PI;
+    // Convert to relative bearing (from ownship heading)
+    const relBearing = geoBearing - ownHeading;
+
+    const clock = bearingToClockPosition(relBearing);
+    const vertical = getVerticalPosition(relAltFt);
+    const miles = binDistance(distanceNm);
+    const mileWord = miles === '1' ? 'Mile' : 'Miles';
+
+    // Build message - omit vertical if within ±850ft
+    if (vertical) {
+        return `Traffic! ${clock} O'clock, ${vertical}, ${miles} ${mileWord}`;
+    } else {
+        return `Traffic! ${clock} O'clock, ${miles} ${mileWord}`;
+    }
+}
+
+/**
+ * Update the TA alert text box display
+ * @param {string|null} message - Alert message to display, or null to hide
+ * @param {number} currentTimeMs - Current simulation time in milliseconds
+ */
+function updateTAAlertDisplay(message, currentTimeMs) {
+    if (!cdtiTAAlertBox) return;
+
+    const persistenceMs = 2000;  // Keep alert visible for 2 seconds after TA clears
+
+    // Detect backwards scrolling (rewinding) - hide alert immediately
+    if (currentTimeMs < lastTAAlertTime) {
+        cdtiTAAlertBox.style.display = 'none';
+        lastTAAlertTime = 0;
+        return;
+    }
+
+    if (message) {
+        // Active TA - show the alert
+        cdtiTAAlertBox.textContent = message;
+        cdtiTAAlertBox.style.display = 'block';
+        lastTAAlertTime = currentTimeMs;
+    } else if (currentTimeMs - lastTAAlertTime < persistenceMs) {
+        // No active TA but within persistence window - keep showing
+        // (message remains unchanged from last update)
+    } else {
+        // No TA and persistence expired - hide
+        cdtiTAAlertBox.style.display = 'none';
+    }
+}
+
+/**
+ * Speak TA alert message using Web Speech API (queued, low load)
+ * @param {string} message - Alert message to speak
+ */
+function speakTAAlert(message) {
+    if (!message || typeof window === 'undefined') return;
+    if (!('speechSynthesis' in window)) return;
+    const utterance = new SpeechSynthesisUtterance(message);
+    window.speechSynthesis.speak(utterance);
+}
+
+/**
+ * Update TA spoken alerts (fire once per new TA target)
+ * @param {Map<string, Object>} taTargetsById - Map of targetId -> { rel, relAltFt, distance }
+ * @param {number} ownHeading - Ownship heading in degrees
+ * @param {number} currentTimeMs - Current simulation time in milliseconds
+ */
+function updateTAAudioAlerts(taTargetsById, ownHeading, currentTimeMs) {
+    if (!taTargetsById) return;
+
+    // Detect backwards scrolling (rewinding) - clear audio state immediately
+    if (currentTimeMs < lastTAAudioTime) {
+        if (typeof window !== 'undefined' && window.speechSynthesis) {
+            window.speechSynthesis.cancel();
+        }
+        lastTAIds = new Set();
+        lastTAAudioTime = 0;
+        return;
+    }
+    lastTAAudioTime = currentTimeMs;
+
+    const currentIds = new Set(taTargetsById.keys());
+    const newTargets = [];
+    currentIds.forEach(id => {
+        if (!lastTAIds.has(id)) {
+            const target = taTargetsById.get(id);
+            if (target) newTargets.push(target);
+        }
+    });
+
+    // Speak closest new targets first (keeps queue ordering sensible)
+    newTargets.sort((a, b) => a.distance - b.distance);
+    newTargets.forEach(target => {
+        const message = buildTAAlertMessage(
+            target.rel.x,
+            target.rel.y,
+            ownHeading,
+            target.relAltFt,
+            target.distance
+        );
+        speakTAAlert(message);
+    });
+
+    lastTAIds = currentIds;
+}
+
 /**
  * Convert lat/lon to nautical miles relative to ownship
  */
@@ -662,6 +838,8 @@ function drawCDTI() {
     // Collect traffic for drawing (sorted by threat priority: OTHER, PA, TA, RA)
     const trafficToDraw = [];
     const outOfRangeAlerts = [];  // RA/TA traffic beyond display range
+    const activeTAs = [];         // Active TAs for aural alert text display
+    const taTargetsById = new Map(); // TA targets for spoken alerts (keyed by target id)
 
     // Get current time for smoothing and persistence
     const currentTimeMs = Cesium.JulianDate.toDate(currentTime).getTime();
@@ -765,6 +943,24 @@ function drawCDTI() {
             groundspeed: aircraft.groundspeed || 100,
             relativeMotion: { vx: relVelRotated.x, vy: relVelRotated.y }
         });
+
+        // Track active TAs for aural alert text display
+        if (threatLevel === 'TA' || threatLevel === 'RA') {
+            activeTAs.push({
+                rel,           // Relative position (x=East, y=North) in nm
+                relAltFt,      // Relative altitude in feet
+                distance       // Distance in nm
+            });
+        }
+
+        // Track active TA targets for spoken alerts (TA only)
+        if (threatLevel === 'TA') {
+            taTargetsById.set(aircraft.id, {
+                rel,
+                relAltFt,
+                distance
+            });
+        }
     });
 
     // Sort by threat priority (draw lower priority first so higher priority renders on top)
@@ -832,6 +1028,27 @@ function drawCDTI() {
         ctx.textAlign = 'center';
         ctx.fillText(utcStr, center, size - 8);
     }
+
+    // Update TA aural alert text display
+    if (activeTAs.length > 0) {
+        // Sort by distance (closest first)
+        activeTAs.sort((a, b) => a.distance - b.distance);
+        const closest = activeTAs[0];
+        const alertMessage = buildTAAlertMessage(
+            closest.rel.x,
+            closest.rel.y,
+            ownHeading,
+            closest.relAltFt,
+            closest.distance
+        );
+        updateTAAlertDisplay(alertMessage, currentTimeMs);
+    } else {
+        // No active TAs - update display (will hide after persistence expires)
+        updateTAAlertDisplay(null, currentTimeMs);
+    }
+
+    // Update TA spoken alerts (per new TA target)
+    updateTAAudioAlerts(taTargetsById, ownHeading, currentTimeMs);
 }
 
 /**
@@ -968,30 +1185,154 @@ function drawOwnshipSymbol(ctx, x, y) {
 }
 
 /**
- * Draw directional arrow inside traffic symbol
- * Per G500 Table 4-21: Directional traffic shows arrow pointing in direction of travel
+ * Check if heading value is valid for directional display
+ * Per G500 Table 7-4: Non-directional symbols used when heading unavailable
+ *
+ * @param {number} heading - Heading value to check
+ * @returns {boolean} True if heading is valid for directional display
+ */
+function isDirectionalHeading(heading) {
+    return heading !== null && heading !== undefined && !isNaN(heading);
+}
+
+/**
+ * Draw G500/600 chevron/arrow symbol (the symbol IS the arrow)
+ * Per Table 7-4: Directional traffic uses chevron shape pointing in direction of travel
+ * Base of triangle has concave arc curving inward
+ *
  * @param {CanvasRenderingContext2D} ctx - Canvas context
  * @param {number} x - Center X position
  * @param {number} y - Center Y position
  * @param {number} heading - Traffic heading relative to display (already rotated for track-up)
- * @param {number} arrowSize - Size of the arrow
- * @param {string} arrowColor - Color for the arrow
+ * @param {number} size - Size of the symbol
+ * @param {string} color - Color for the symbol
+ * @param {boolean} filled - Whether to fill (proximate) or stroke (basic)
  */
-function drawDirectionalArrow(ctx, x, y, heading, arrowSize, arrowColor) {
+function drawChevronSymbol(ctx, x, y, heading, size, color, filled) {
+    const headingRad = heading * Math.PI / 180;
+
+    // Chevron dimensions - taller and narrower for sharper tip angle
+    const tipLength = size * 1.4;    // Distance from center to tip (longer = sharper)
+    const wingSpread = size * 0.6;   // Width at widest point (narrower = sharper)
+    const wingBack = size * 0.5;     // How far back the wings are from center
+
+    // Calculate points rotated by heading
+    // Tip (front, in direction of travel)
+    const tipX = x + Math.sin(headingRad) * tipLength;
+    const tipY = y - Math.cos(headingRad) * tipLength;
+
+    // Wing points (perpendicular to heading, at the back)
+    const perpX = Math.cos(headingRad);
+    const perpY = Math.sin(headingRad);
+
+    const wing1X = x - Math.sin(headingRad) * wingBack + perpX * wingSpread;
+    const wing1Y = y + Math.cos(headingRad) * wingBack + perpY * wingSpread;
+    const wing2X = x - Math.sin(headingRad) * wingBack - perpX * wingSpread;
+    const wing2Y = y + Math.cos(headingRad) * wingBack - perpY * wingSpread;
+
+    // Control point for the concave arc (curves inward toward the tip)
+    const arcDepth = size * 0.4;     // How deep the concave arc goes
+    const arcCtrlX = x + Math.sin(headingRad) * arcDepth;
+    const arcCtrlY = y - Math.cos(headingRad) * arcDepth;
+
+    ctx.save();
+
+    if (filled) {
+        // Filled chevron needs to be slightly larger to match visual size of stroked version
+        // (stroke adds width outside the path, making open chevrons appear larger)
+        const scale = 1.15;
+        const tipXf = x + Math.sin(headingRad) * tipLength * scale;
+        const tipYf = y - Math.cos(headingRad) * tipLength * scale;
+        const wing1Xf = x - Math.sin(headingRad) * wingBack * scale + perpX * wingSpread * scale;
+        const wing1Yf = y + Math.cos(headingRad) * wingBack * scale + perpY * wingSpread * scale;
+        const wing2Xf = x - Math.sin(headingRad) * wingBack * scale - perpX * wingSpread * scale;
+        const wing2Yf = y + Math.cos(headingRad) * wingBack * scale - perpY * wingSpread * scale;
+        const arcCtrlXf = x + Math.sin(headingRad) * arcDepth * scale;
+        const arcCtrlYf = y - Math.cos(headingRad) * arcDepth * scale;
+
+        ctx.beginPath();
+        ctx.moveTo(tipXf, tipYf);
+        ctx.lineTo(wing1Xf, wing1Yf);
+        ctx.quadraticCurveTo(arcCtrlXf, arcCtrlYf, wing2Xf, wing2Yf);
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.fill();
+    } else {
+        // Open chevron - fill interior with black first to cover motion vector line
+        ctx.beginPath();
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(wing1X, wing1Y);
+        ctx.quadraticCurveTo(arcCtrlX, arcCtrlY, wing2X, wing2Y);
+        ctx.closePath();
+        ctx.fillStyle = '#000000';
+        ctx.fill();
+        // Then stroke the outline
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    }
+
+    ctx.restore();
+}
+
+/**
+ * Draw G500/600 diamond symbol (non-directional traffic)
+ * Per Table 7-4: Non-directional traffic uses diamond shape
+ *
+ * @param {CanvasRenderingContext2D} ctx - Canvas context
+ * @param {number} x - Center X position
+ * @param {number} y - Center Y position
+ * @param {number} size - Size of the symbol
+ * @param {string} color - Color for the symbol
+ * @param {boolean} filled - Whether to fill (proximate) or stroke (basic)
+ */
+function drawDiamondSymbol(ctx, x, y, size, color, filled) {
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+
+    ctx.beginPath();
+    ctx.moveTo(x, y - size);        // Top
+    ctx.lineTo(x + size, y);        // Right
+    ctx.lineTo(x, y + size);        // Bottom
+    ctx.lineTo(x - size, y);        // Left
+    ctx.closePath();
+
+    if (filled) {
+        ctx.fill();
+    } else {
+        ctx.stroke();
+    }
+
+    ctx.restore();
+}
+
+/**
+ * Draw small directional arrow inside TA circle (G500 Table 7-4)
+ * For directional alerted traffic - arrow inside yellow circle
+ *
+ * @param {CanvasRenderingContext2D} ctx - Canvas context
+ * @param {number} x - Center X position
+ * @param {number} y - Center Y position
+ * @param {number} heading - Traffic heading relative to display
+ * @param {number} arrowSize - Size of the arrow
+ * @param {string} arrowColor - Color for the arrow (typically black for contrast)
+ */
+function drawDirectionalArrowInside(ctx, x, y, heading, arrowSize, arrowColor) {
     if (!CDTI_CONFIG.showDirectionalArrows) return;
 
-    // Convert heading to radians (0 = up on display after track-up rotation)
     const headingRad = heading * Math.PI / 180;
 
     // Arrow points in direction of travel
     const tipX = x + Math.sin(headingRad) * arrowSize;
     const tipY = y - Math.cos(headingRad) * arrowSize;
 
-    // Arrow base (opposite direction from tip)
+    // Arrow base
     const baseX = x - Math.sin(headingRad) * (arrowSize * 0.3);
     const baseY = y + Math.cos(headingRad) * (arrowSize * 0.3);
 
-    // Arrow wings (perpendicular to direction)
+    // Arrow wings
     const wingSpread = arrowSize * 0.4;
     const wingBack = arrowSize * 0.5;
     const perpX = Math.cos(headingRad);
@@ -1007,7 +1348,6 @@ function drawDirectionalArrow(ctx, x, y, heading, arrowSize, arrowColor) {
     ctx.strokeStyle = arrowColor;
     ctx.lineWidth = 1.5;
 
-    // Draw filled arrow shape
     ctx.beginPath();
     ctx.moveTo(tipX, tipY);
     ctx.lineTo(wing1X, wing1Y);
@@ -1017,6 +1357,14 @@ function drawDirectionalArrow(ctx, x, y, heading, arrowSize, arrowColor) {
     ctx.fill();
 
     ctx.restore();
+}
+
+/**
+ * Legacy function for backwards compatibility
+ * Now calls drawDirectionalArrowInside
+ */
+function drawDirectionalArrow(ctx, x, y, heading, arrowSize, arrowColor) {
+    drawDirectionalArrowInside(ctx, x, y, heading, arrowSize, arrowColor);
 }
 
 /**
@@ -1101,27 +1449,36 @@ function drawMotionVector(ctx, x, y, heading, groundspeed, scale, threatLevel, r
 }
 
 /**
- * Draw traffic symbol based on RTCA standard with G500 directional arrows and motion vectors
- * - RA: Red filled square with directional arrow
- * - TA: Yellow filled circle with directional arrow (G500 Table 4-21)
- * - PA: Cyan filled diamond with directional arrow
- * - OTHER: Cyan open/hollow diamond with directional arrow
+ * Draw traffic symbol based on Garmin G500/600 Table 7-4 ADS-B symbology
+ *
+ * Symbol types based on threat level and heading availability:
+ * - TA (Traffic Advisory): Yellow circle
+ *     - Directional: filled circle with black arrow inside
+ *     - Non-directional: open/hollow yellow circle
+ * - PA (Proximate): Cyan filled symbols
+ *     - Directional: filled chevron pointing in direction of travel
+ *     - Non-directional: filled diamond
+ * - OTHER (Basic): Cyan open/outline symbols
+ *     - Directional: open chevron pointing in direction of travel
+ *     - Non-directional: open diamond
+ * - RA (TCAS II only): Red filled square (not available on GDL 88 TAS)
  *
  * @param {CanvasRenderingContext2D} ctx - Canvas context
  * @param {number} x - Center X position (pixels)
  * @param {number} y - Center Y position (pixels)
- * @param {number} heading - Traffic heading relative to display (degrees)
+ * @param {number} heading - Traffic heading relative to display (degrees), null/undefined = non-directional
  * @param {number} relAlt - Relative altitude in hundreds of feet
  * @param {number} verticalRate - Vertical rate in fpm
- * @param {string} threatLevel - Threat classification
+ * @param {string} threatLevel - Threat classification ('RA', 'TA', 'PA', 'OTHER')
  * @param {Object} motionParams - Optional motion vector parameters {groundspeed, scale, relativeMotion}
  */
 function drawTrafficSymbol(ctx, x, y, heading, relAlt, verticalRate, threatLevel = 'OTHER', motionParams = null) {
-    const size = 8;
+    const size = 10;  // Symbol size in pixels (G500 scale)
     const color = CDTI_COLORS[threatLevel];
+    const isDirectional = isDirectionalHeading(heading);
 
     // Draw motion vector first (behind symbol)
-    if (motionParams && CDTI_CONFIG.motionVectorMode !== 'OFF') {
+    if (motionParams && CDTI_CONFIG.motionVectorMode !== 'OFF' && isDirectional) {
         drawMotionVector(
             ctx, x, y,
             heading,
@@ -1136,53 +1493,58 @@ function drawTrafficSymbol(ctx, x, y, heading, relAlt, verticalRate, threatLevel
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
 
-    // Choose arrow color based on threat level
-    // For TA/RA: use contrasting color (black for visibility on yellow/red)
-    // For PA/OTHER: use white for visibility on cyan
-    const arrowColor = (threatLevel === 'TA' || threatLevel === 'RA') ? '#000000' : '#FFFFFF';
-
     switch (threatLevel) {
         case 'RA':
-            // Filled red square
+            // Red filled square (TCAS II only - not shown on GDL 88 TAS)
+            ctx.fillStyle = CDTI_COLORS.RA;
             ctx.fillRect(x - size, y - size, size * 2, size * 2);
-            // Directional arrow inside
-            drawDirectionalArrow(ctx, x, y, heading, size * 0.7, arrowColor);
+            // Directional arrow inside if heading available
+            if (isDirectional) {
+                drawDirectionalArrowInside(ctx, x, y, heading, size * 0.7, '#000000');
+            }
             break;
 
         case 'TA':
-            // Filled yellow circle
-            ctx.beginPath();
-            ctx.arc(x, y, size, 0, 2 * Math.PI);
-            ctx.fill();
-            // Directional arrow inside (G500 Table 4-21)
-            drawDirectionalArrow(ctx, x, y, heading, size * 0.7, arrowColor);
+            // Traffic Advisory - Yellow circle per G500 Table 7-4
+            ctx.fillStyle = CDTI_COLORS.TA;
+            ctx.strokeStyle = CDTI_COLORS.TA;
+            if (isDirectional) {
+                // Directional Alerted Traffic: Filled yellow circle with arrow inside
+                ctx.beginPath();
+                ctx.arc(x, y, size, 0, 2 * Math.PI);
+                ctx.fill();
+                // Black arrow inside for contrast (larger for visibility)
+                drawDirectionalArrowInside(ctx, x, y, heading, size * 0.85, '#000000');
+            } else {
+                // Non-Directional Alerted Traffic: Open/hollow yellow circle
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(x, y, size, 0, 2 * Math.PI);
+                ctx.stroke();
+            }
             break;
 
         case 'PA':
-            // Filled cyan diamond
-            ctx.beginPath();
-            ctx.moveTo(x, y - size);        // Top
-            ctx.lineTo(x + size, y);        // Right
-            ctx.lineTo(x, y + size);        // Bottom
-            ctx.lineTo(x - size, y);        // Left
-            ctx.closePath();
-            ctx.fill();
-            // Directional arrow inside
-            drawDirectionalArrow(ctx, x, y, heading, size * 0.6, arrowColor);
+            // Proximate Traffic - Filled cyan symbols per G500 Table 7-4
+            if (isDirectional) {
+                // Proximate Directional Traffic: Filled cyan chevron
+                drawChevronSymbol(ctx, x, y, heading, size, CDTI_COLORS.PA, true);
+            } else {
+                // Proximate Non-Directional Traffic: Filled cyan diamond
+                drawDiamondSymbol(ctx, x, y, size, CDTI_COLORS.PA, true);
+            }
             break;
 
         case 'OTHER':
         default:
-            // Open/hollow cyan diamond
-            ctx.beginPath();
-            ctx.moveTo(x, y - size);        // Top
-            ctx.lineTo(x + size, y);        // Right
-            ctx.lineTo(x, y + size);        // Bottom
-            ctx.lineTo(x - size, y);        // Left
-            ctx.closePath();
-            ctx.stroke();
-            // Directional arrow inside (smaller for hollow symbol)
-            drawDirectionalArrow(ctx, x, y, heading, size * 0.5, color);
+            // Basic Traffic - Open/outline cyan symbols per G500 Table 7-4
+            if (isDirectional) {
+                // Basic Directional Traffic: Open cyan chevron
+                drawChevronSymbol(ctx, x, y, heading, size, CDTI_COLORS.OTHER, false);
+            } else {
+                // Basic Non-Directional Traffic: Open cyan diamond
+                drawDiamondSymbol(ctx, x, y, size, CDTI_COLORS.OTHER, false);
+            }
             break;
     }
 
@@ -1191,29 +1553,48 @@ function drawTrafficSymbol(ctx, x, y, heading, relAlt, verticalRate, threatLevel
 }
 
 /**
- * Draw out-of-range RA/TA symbol (half symbol at compass edge)
+ * Draw out-of-range (off-scale) RA/TA symbol at compass edge
+ * Per G500 Table 7-4:
+ * - Off-Scale Non-Directional Alerted Traffic: Half yellow circle
+ * - Off-Scale Directional Alerted Traffic: Half yellow circle with arrow
+ *
+ * Note: Currently renders as non-directional since heading data not passed
+ * TODO: Add heading parameter for directional off-scale symbols
+ *
+ * @param {CanvasRenderingContext2D} ctx - Canvas context
+ * @param {number} x - X position at display edge
+ * @param {number} y - Y position at display edge
+ * @param {number} relAlt - Relative altitude in hundreds of feet
+ * @param {number} verticalRate - Vertical rate in fpm
+ * @param {string} threatLevel - Threat level ('RA' or 'TA')
+ * @param {number} angleFromCenter - Angle from display center (radians), used for half-symbol orientation
  */
-function drawOutOfRangeSymbol(ctx, x, y, relAlt, verticalRate, threatLevel) {
-    const size = 10;
+function drawOutOfRangeSymbol(ctx, x, y, relAlt, verticalRate, threatLevel, angleFromCenter = 0) {
+    const size = 11;  // Off-scale symbol size (G500 scale)
     const color = CDTI_COLORS[threatLevel];
 
+    ctx.save();
     ctx.fillStyle = color;
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
 
-    // Calculate angle from center to position for clipping
-    ctx.save();
-
     switch (threatLevel) {
         case 'RA':
-            // Half-filled red square (only inner half visible)
-            ctx.fillRect(x - size * 0.5, y - size, size, size * 2);
+            // Half-filled red square (TCAS II only)
+            // Oriented so inner half faces center
+            ctx.translate(x, y);
+            ctx.rotate(angleFromCenter + Math.PI);  // Rotate to face center
+            ctx.fillRect(-size * 0.5, -size, size, size * 2);
             break;
 
         case 'TA':
-            // Half-filled yellow circle
+            // Off-Scale Alerted Traffic: Half yellow circle per G500 Table 7-4
+            // Semi-circle oriented with flat edge toward display center
+            ctx.translate(x, y);
+            ctx.rotate(angleFromCenter + Math.PI);  // Rotate to face center
             ctx.beginPath();
-            ctx.arc(x, y, size, -Math.PI / 2, Math.PI / 2);
+            ctx.arc(0, 0, size, -Math.PI / 2, Math.PI / 2);
+            ctx.closePath();
             ctx.fill();
             break;
     }
@@ -1292,7 +1673,7 @@ function createCDTIOverlay() {
         top: 100px;
         right: 100px;
         width: 550px;
-        height: 580px;
+        height: 630px;
         z-index: 2000;
         display: none;
         background: rgba(30, 30, 30, 0.95);
@@ -1403,7 +1784,7 @@ function createCDTIOverlay() {
     const canvasContainer = document.createElement('div');
     canvasContainer.style.cssText = `
         width: 100%;
-        height: calc(100% - 60px);
+        height: calc(100% - 130px);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -1422,7 +1803,26 @@ function createCDTIOverlay() {
     cdtiCtx = cdtiCanvas.getContext('2d');
     
     canvasContainer.appendChild(cdtiCanvas);
-    
+
+    // TA Aural Alert Text Display Box
+    // Per GDL 88, displays: "Traffic! X O'clock, Low/High, X Miles"
+    cdtiTAAlertBox = document.createElement('div');
+    cdtiTAAlertBox.id = 'cdti-ta-alert';
+    cdtiTAAlertBox.style.cssText = `
+        background: rgba(0, 0, 0, 0.9);
+        color: #FFFF00;
+        font-family: monospace;
+        font-size: 14px;
+        font-weight: bold;
+        padding: 8px 16px;
+        text-align: center;
+        border: 2px solid #FFFF00;
+        border-radius: 4px;
+        display: none;
+        margin: 4px auto;
+        width: fit-content;
+    `;
+
     // Controls bar
     const controlsBar = document.createElement('div');
     controlsBar.style.cssText = `
@@ -1549,6 +1949,7 @@ function createCDTIOverlay() {
     
     cdtiOverlay.appendChild(titleBar);
     cdtiOverlay.appendChild(canvasContainer);
+    cdtiOverlay.appendChild(cdtiTAAlertBox);
     cdtiOverlay.appendChild(controlsBar);
     document.body.appendChild(cdtiOverlay);
     
@@ -1559,7 +1960,7 @@ function createCDTIOverlay() {
     const resizeObserver = new ResizeObserver(entries => {
         for (let entry of entries) {
             const width = entry.contentRect.width;
-            const height = entry.contentRect.height - 60;  // Subtract title and controls
+            const height = entry.contentRect.height - 130;  // Subtract title, alert box, and controls
             const size = Math.min(width - 10, height - 10);
             if (size > 100) {
                 cdtiCanvas.width = size;
@@ -1672,34 +2073,48 @@ function createLegend() {
 
     cdtiLegend.innerHTML = `
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid #444; padding-bottom: 8px;">
-            <span style="font-size: 13px; font-weight: bold; color: #fff;">CDTI Symbology (G500/RTCA)</span>
+            <span style="font-size: 13px; font-weight: bold; color: #fff;">Garmin G500/600 ADS-B Symbology (Table 7-4)</span>
             <button id="cdtiLegendClose" style="background: transparent; color: #aaa; border: none; cursor: pointer; font-size: 16px; padding: 0 4px;">✕</button>
         </div>
 
         <div style="font-size: 11px; line-height: 1.8;">
-            <div style="margin-bottom: 10px; font-weight: bold; color: #fff;">Traffic Symbols (with directional arrows):</div>
+            <div style="margin-bottom: 10px; font-weight: bold; color: #fff;">Traffic Advisory (TA):</div>
 
             <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
-                <svg width="24" height="24"><rect x="4" y="4" width="16" height="16" fill="#FF0000"/></svg>
-                <span><span style="color: #FF0000; font-weight: bold;">RA</span> - Resolution Advisory (TCAS II only)</span>
-            </div>
-
-            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
-                <svg width="24" height="24"><circle cx="12" cy="12" r="8" fill="#FFFF00"/></svg>
-                <span><span style="color: #FFFF00; font-weight: bold;">TA</span> - Traffic Advisory (GDL 88 TAS)</span>
+                <svg width="24" height="24"><circle cx="12" cy="12" r="8" fill="#FFFF00"/><polygon points="12,6 16,14 12,12 8,14" fill="#000"/></svg>
+                <span><span style="color: #FFFF00; font-weight: bold;">TA Directional</span> - Yellow circle with arrow</span>
             </div>
 
             <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
-                <svg width="24" height="24"><polygon points="12,2 22,12 12,22 2,12" fill="#00FFFF"/></svg>
-                <span><span style="color: #00FFFF; font-weight: bold;">PA</span> - Proximity Advisory (≤4nm, ±1200ft)</span>
+                <svg width="24" height="24"><circle cx="12" cy="12" r="8" fill="none" stroke="#FFFF00" stroke-width="2"/></svg>
+                <span><span style="color: #FFFF00;">TA Non-Directional</span> - Yellow circle (hollow)</span>
             </div>
 
-            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 10px;">
-                <svg width="24" height="24"><polygon points="12,4 20,12 12,20 4,12" fill="none" stroke="#00FFFF" stroke-width="2"/></svg>
-                <span style="color: #00FFFF;">Other Traffic (non-alerting)</span>
+            <div style="margin: 10px 0; font-weight: bold; color: #fff;">Proximate Traffic (PA):</div>
+
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
+                <svg width="24" height="24"><polygon points="12,2 18,14 12,10 6,14" fill="#CCCCCC"/></svg>
+                <span><span style="color: #CCCCCC; font-weight: bold;">Proximate Directional</span> - Filled chevron</span>
             </div>
 
-            <div style="margin: 10px 0; font-weight: bold; color: #fff;">Motion Vectors (G500):</div>
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
+                <svg width="24" height="24"><polygon points="12,4 20,12 12,20 4,12" fill="#CCCCCC"/></svg>
+                <span><span style="color: #CCCCCC;">Proximate Non-Dir</span> - Filled diamond</span>
+            </div>
+
+            <div style="margin: 10px 0; font-weight: bold; color: #fff;">Basic Traffic:</div>
+
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
+                <svg width="24" height="24"><polygon points="12,2 18,14 12,10 6,14" fill="none" stroke="#CCCCCC" stroke-width="2"/></svg>
+                <span><span style="color: #CCCCCC;">Basic Directional</span> - Open chevron</span>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
+                <svg width="24" height="24"><polygon points="12,4 20,12 12,20 4,12" fill="none" stroke="#CCCCCC" stroke-width="2"/></svg>
+                <span><span style="color: #CCCCCC;">Basic Non-Directional</span> - Open diamond</span>
+            </div>
+
+            <div style="margin: 10px 0; font-weight: bold; color: #fff;">Motion Vectors:</div>
             <div style="margin-left: 10px; font-size: 10px;">
                 <div><span style="color: #fff;">Absolute:</span> Shows actual ground track (white/yellow)</div>
                 <div><span style="color: #0f0;">Relative:</span> Shows motion relative to ownship (green)</div>
@@ -1717,14 +2132,14 @@ function createLegend() {
 
             <div style="margin: 10px 0; font-weight: bold; color: #fff;">Altitude Tag:</div>
             <div style="margin-left: 10px; margin-bottom: 6px;">
-                <span style="color: #00FFFF;">+05</span> = 500ft above &nbsp;&nbsp;
-                <span style="color: #00FFFF;">-02</span> = 200ft below
+                <span style="color: #CCCCCC;">+05</span> = 500ft above &nbsp;&nbsp;
+                <span style="color: #CCCCCC;">-02</span> = 200ft below
             </div>
 
             <div style="margin: 10px 0; font-weight: bold; color: #fff;">Vertical Trend (>500 fpm):</div>
             <div style="margin-left: 10px; margin-bottom: 6px;">
-                <span style="color: #00FFFF;">↑</span> Climbing &nbsp;&nbsp;
-                <span style="color: #00FFFF;">↓</span> Descending
+                <span style="color: #CCCCCC;">&#8593;</span> Climbing &nbsp;&nbsp;
+                <span style="color: #CCCCCC;">&#8595;</span> Descending
             </div>
 
             <div style="margin: 10px 0; font-weight: bold; color: #fff;">Altitude Filters:</div>
@@ -2087,6 +2502,13 @@ export function removeCDTI() {
     if (cdtiButton) cdtiButton.remove();
     if (exportButton) exportButton.remove();
     if (cdtiOverlay) cdtiOverlay.remove();
+    cdtiTAAlertBox = null;
+    lastTAAlertTime = 0;
+    lastTAAudioTime = 0;
+    lastTAIds = new Set();
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+    }
     if (cdtiLegend) cdtiLegend.remove();
 }
 

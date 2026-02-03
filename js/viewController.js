@@ -3,14 +3,12 @@
 // ===========================================================
 //
 // Popup menu for selecting camera views:
-//   - Runway - Approach view centered between 30L/30R  
-//   - Ambiguity Surface - View of the cone of ambiguity
-//   - FALCON LIMITS - Top-down matching FALCON display coverage
+//   - Runway - Approach view centered between 30L/30R
+//   - Collision View - Camera at collision point
 //   - Overhead - Original overhead perspective
 //
 // ===========================================================
 
-import { setFalconLimitsVisible, ATCT_POSITION, FALCON_HEIGHT_NM, FALCON_WIDTH_NM } from './FalconLimits.js';
 import { set3DModelVisible } from './drones.js';
 import { setCollisionViewState } from './aircraftPanel.js';
 
@@ -26,13 +24,6 @@ const RUNWAY_30_CENTER = {
     lat: 36.197462,       // South of field, on approach
     lon: -115.178855,     // Centered between 30L/30R
     altFt: 2500
-};
-
-// Ambiguity Surface View
-const AMBIGUITY_VIEW_LOCN = {
-    lat: 36.195722,    
-    lon: -115.165318,     
-    altFt: 3500
 };
 
 // View definitions
@@ -52,47 +43,6 @@ const VIEWS = [
                 orientation: {
                     heading: Cesium.Math.toRadians(315),
                     pitch: Cesium.Math.toRadians(-10),
-                    roll: 0
-                }
-            };
-        }
-    },
-    {
-        name: "Ambiguity Surface",
-        buttonLabel: "[+] Ambiguity Surface View",
-        getView: () => {
-            const altitudeMeters = AMBIGUITY_VIEW_LOCN.altFt * 0.3048;
-
-            return {
-                destination: Cesium.Cartesian3.fromDegrees(
-                    AMBIGUITY_VIEW_LOCN.lon,
-                    AMBIGUITY_VIEW_LOCN.lat,
-                    altitudeMeters
-                ),
-                orientation: {
-                    heading: Cesium.Math.toRadians(297),
-                    pitch: Cesium.Math.toRadians(-5),  
-                    roll: 0
-                }
-            };
-        }
-    },
-    {
-        name: "FALCON LIMITS",
-        buttonLabel: "[+] FALCON Limits View",
-        getView: () => {
-            const coverageNM = Math.max(FALCON_WIDTH_NM, FALCON_HEIGHT_NM);
-            const altitudeMeters = coverageNM * 1852 * 0.9;
-
-            return {
-                destination: Cesium.Cartesian3.fromDegrees(
-                    ATCT_POSITION.lon,
-                    ATCT_POSITION.lat,
-                    altitudeMeters
-                ),
-                orientation: {
-                    heading: Cesium.Math.toRadians(0),
-                    pitch: Cesium.Math.toRadians(-90),
                     roll: 0
                 }
             };
@@ -255,9 +205,6 @@ function selectView(index) {
     const view = VIEWS[currentViewIndex];
     const viewConfig = view.getView(viewerRef._originalView);
 
-    // Toggle FALCON limits visibility based on view selection
-    setFalconLimitsVisible(view.name === "FALCON LIMITS");
-
     viewerRef.camera.flyTo({
         destination: viewConfig.destination,
         orientation: viewConfig.orientation,
@@ -296,10 +243,6 @@ export function setupViewController(viewer, originalView, button = null) {
         }
     });
     
-    // Set initial FALCON visibility based on current view
-    const currentView = VIEWS[currentViewIndex];
-    setFalconLimitsVisible(currentView.name === "FALCON LIMITS");
-    
     // console.log(`View controller initialized with ${VIEWS.length} views`);
 }
 
@@ -313,16 +256,12 @@ export function createChangeViewButton(createButtonFn, position) {
     currentViewIndex = VIEWS.length - 1;  // Start at Overhead (last index)
     viewButton = createButtonFn(VIEWS[currentViewIndex].buttonLabel, position, toggleMenu);
     
-    // Explicitly set initial FALCON visibility based on starting view
-    const initialView = VIEWS[currentViewIndex];
-    setFalconLimitsVisible(initialView.name === "FALCON LIMITS");
-    
     return viewButton;
 }
 
 /**
  * Go to a specific view by name
- * @param {string} viewName - "FALCON LIMITS", "Runway", "Ambiguity Surface", or "Overhead"
+ * @param {string} viewName - "Runway", "Collision View", or "Overhead"
  */
 export function goToView(viewName) {
     const index = VIEWS.findIndex(v => v.name === viewName);

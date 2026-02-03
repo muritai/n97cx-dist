@@ -3,9 +3,9 @@
 // ===========================================================
 //
 // Popup menu for selecting camera views:
-//   - Runway - Approach view centered between 30L/30R
+//   - Runway - Approach view centered between 30L/30R  
+//   - Ambiguity Surface - View of the cone of ambiguity
 //   - FALCON LIMITS - Top-down matching FALCON display coverage
-//   - Collision View - Collision moment camera position
 //   - Overhead - Original overhead perspective
 //
 // ===========================================================
@@ -28,6 +28,13 @@ const RUNWAY_30_CENTER = {
     altFt: 2500
 };
 
+// Ambiguity Surface View
+const AMBIGUITY_VIEW_LOCN = {
+    lat: 36.195722,    
+    lon: -115.165318,     
+    altFt: 3500
+};
+
 // View definitions
 const VIEWS = [
     {
@@ -45,6 +52,26 @@ const VIEWS = [
                 orientation: {
                     heading: Cesium.Math.toRadians(315),
                     pitch: Cesium.Math.toRadians(-10),
+                    roll: 0
+                }
+            };
+        }
+    },
+    {
+        name: "Ambiguity Surface",
+        buttonLabel: "[+] Ambiguity Surface View",
+        getView: () => {
+            const altitudeMeters = AMBIGUITY_VIEW_LOCN.altFt * 0.3048;
+
+            return {
+                destination: Cesium.Cartesian3.fromDegrees(
+                    AMBIGUITY_VIEW_LOCN.lon,
+                    AMBIGUITY_VIEW_LOCN.lat,
+                    altitudeMeters
+                ),
+                orientation: {
+                    heading: Cesium.Math.toRadians(297),
+                    pitch: Cesium.Math.toRadians(-5),  
                     roll: 0
                 }
             };
@@ -87,7 +114,7 @@ const VIEWS = [
             // Collision midpoint (between the two aircraft)
             const collisionLat = 36.202797;
             const collisionLon = -115.184278;
-            const cessnaAltFt = 2286;
+            const cessnaAltFt = 2262.8;
             const cameraOffsetFt = 18;  // Raise camera to better viewing height
             const geoidOffsetFt = -91.9;
             const altMeters = (cessnaAltFt + cameraOffsetFt + geoidOffsetFt) * 0.3048;
@@ -114,7 +141,7 @@ const VIEWS = [
         },
         onExit: () => {
             // Do nothing - leave everything as-is (clock stopped, 3D models visible)
-            console.log('Exited Collision View - state preserved');
+            // console.log('Exited Collision View - state preserved');
         }
     },
     {
@@ -243,7 +270,7 @@ function selectView(index) {
     }
 
     hideMenu();
-    console.log(`📍 Camera changed to ${view.name} view`);
+    // console.log(`📍 Camera changed to ${view.name} view`);
 }
 
 /**
@@ -273,7 +300,7 @@ export function setupViewController(viewer, originalView, button = null) {
     const currentView = VIEWS[currentViewIndex];
     setFalconLimitsVisible(currentView.name === "FALCON LIMITS");
     
-    console.log(`View controller initialized with ${VIEWS.length} views`);
+    // console.log(`View controller initialized with ${VIEWS.length} views`);
 }
 
 /**
@@ -327,5 +354,5 @@ export function addView(name, buttonLabel, getViewFn) {
         menuElement = null;
     }
     
-    console.log(`Added view: ${name}. Total views: ${VIEWS.length}`);
+    // console.log(`Added view: ${name}. Total views: ${VIEWS.length}`);
 }

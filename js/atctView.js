@@ -36,10 +36,11 @@ const FOV_SNAP_TOLERANCE = 3;  // Snap within ±3 degrees
 
 // FOV detents with labels
 const FOV_DETENTS = [
-    { value: 20, label: "Binoculars" },
-    { value: 50, label: "Human Eye" },
-    { value: 60, label: "Default" },
-    { value: 80, label: "Wide Angle" }
+    { value: 20, label: "20 - tele" },
+    { value: 40, label: "40" },
+    { value: 50, label: "50" },
+    { value: 60, label: "60" },
+    { value: 80, label: "80 - wide" }
 ];
 
 let atctBtn = null;
@@ -58,6 +59,8 @@ import { AIRCRAFT_ORDER } from "./aircraftPanel.js";
 
 import { disableFollowView } from "./followView.js";
 
+import { get3DModelPosition } from "./drones.js";
+
 
 // ================== PUBLIC API (MODIFIED) ==================
 
@@ -68,7 +71,18 @@ export function setupATCTView(viewer, towerLat, towerLon, towerHeight, followBtn
     atctLon = towerLon;
     atctHeight = towerHeight;
 
+    // 🔥 ADDED LOGGING HERE:
+    // console.log("-----------------------------------------");
+    // console.log("✅ ATCT View Setup:");
+    // console.log(`Input Height (meters): ${atctHeight.toFixed(2)}`);
+    // console.log(`Input Lat/Lon: (${atctLat.toFixed(5)}, ${atctLon.toFixed(5)})`);
+    // console.log("-----------------------------------------");
+
     atctPosition = Cesium.Cartesian3.fromDegrees(atctLon, atctLat, atctHeight);
+
+    // 🔥 ADDED LOGGING OF FINAL CARTESIAN:
+    // console.log("Final ATCT Camera Position (Cartesian3):", atctPosition.toString());
+    // console.log("-----------------------------------------");
 
     createATCTButton();
     buildControlPanel();
@@ -173,9 +187,12 @@ function buildControlPanel() {
     panel.appendChild(headerRow);
 
 
+    // ================= TRACK AIRCRAFT DROPDOWN =================
     const trackContainer = document.createElement("div");
     trackContainer.style.marginBottom = "8px";
-    trackContainer.style.display = "none";
+
+    // TEMPORARY DISABLE:
+    // trackContainer.style.display = "none";   // ← hides whole dropdown
 
     const trackLabel = document.createElement("div");
     trackLabel.innerText = "Track Aircraft";
@@ -288,8 +305,8 @@ function buildControlPanel() {
     });
     panel.appendChild(heightSlider);
 
+    // --- FOV (Field of View) ---
     const fovContainer = document.createElement("div");
-    fovContainer.style.display = "none";
     fovContainer.style.marginTop = "12px";
     fovContainer.style.borderTop = "1px solid #555";
     fovContainer.style.paddingTop = "8px";
@@ -411,7 +428,7 @@ function applyFovToCamera() {
 }
 
 function resetFovToDefault() {
-    atctFovDeg = 60;  // Human Eye
+    atctFovDeg = 50;  // Human Eye
     if (fovSlider) fovSlider.value = atctFovDeg;
     updateFovModeLabel();
     applyFovToCamera();
@@ -439,6 +456,7 @@ function enableATCTView() {
     // Set default FOV (Human Eye 50°)
     resetFovToDefault();
 
+    // 🔥 Refresh dropdown NOW that aircraft exist
     refreshTrackingList(trackSelect);
 
 
@@ -496,10 +514,41 @@ function atctViewTick(clock) {
     if (atctTrackEnabled && atctTrackingTarget) {
         let targetCartesian = null;
 
-        // Look up the target entity directly
-        const drone = viewerRef.entities.getById(atctTrackingTarget);
-        if (drone && drone.position) {
-            targetCartesian = drone.position.getValue(clock.currentTime);
+        // For primary aircraft, use stored position property (survives entity removal)
+        const primaryAircraft = ['N97CX', 'N160RA'];
+        let isPrimaryAircraft = false;
+
+        for (const baseId of primaryAircraft) {
+            if (atctTrackingTarget === baseId || atctTrackingTarget === `${baseId}-3d-model`) {
+                isPrimaryAircraft = true;
+
+                // First try the stored 3D model position (most reliable)
+                const storedPosition = get3DModelPosition(baseId);
+                if (storedPosition) {
+                    targetCartesian = storedPosition.getValue(clock.currentTime);
+                }
+
+                // Fallback to entity lookup
+                if (!targetCartesian) {
+                    const idsToTry = [`${baseId}-3d-model`, baseId];
+                    for (const entityId of idsToTry) {
+                        const ent = viewerRef.entities.getById(entityId);
+                        if (ent && ent.position) {
+                            targetCartesian = ent.position.getValue(clock.currentTime);
+                            if (targetCartesian) break;
+                        }
+                    }
+                }
+                break;
+            }
+        }
+
+        // For non-primary aircraft, use direct lookup
+        if (!isPrimaryAircraft) {
+            const drone = viewerRef.entities.getById(atctTrackingTarget);
+            if (drone && drone.position) {
+                targetCartesian = drone.position.getValue(clock.currentTime);
+            }
         }
 
         if (targetCartesian) {
@@ -643,14 +692,52 @@ function refreshTrackingList(trackSelect) {
         trackSelect.remove(1);
     }
 
-    // Add aircraft following the AIRCRAFT_ORDER list
+    // Primary aircraft (N97CX first, then N160RA)
+    const primaryAircraft = ['N97CX', 'N160RA'];
+
+    // Add N97CX and N160RA first at the top
+    primaryAircraft.forEach(baseId => {
+        // Check if either base or 3D model entity exists
+        const modelId = `${baseId}-3d-model`;
+        const modelEnt = viewerRef.entities.getById(modelId);
+        const baseEnt = viewerRef.entities.getById(baseId);
+
+        // Need at least one entity to exist
+        if (!modelEnt && !baseEnt) return;
+
+        // Always track using whichever entity exists (prefer 3D model for position)
+        const trackId = modelEnt ? modelId : baseId;
+
+        const opt = document.createElement("option");
+        opt.value = trackId;
+        opt.textContent = baseId;
+        trackSelect.appendChild(opt);
+    });
+
+    // Add remaining aircraft following the AIRCRAFT_ORDER list
     AIRCRAFT_ORDER.forEach(id => {
+        // Skip primary aircraft - already added above
+        if (primaryAircraft.includes(id)) return;
+
         const ent = viewerRef.entities.getById(id);
         if (!ent) return;
 
         const opt = document.createElement("option");
         opt.value = id;
         opt.textContent = id;
+        trackSelect.appendChild(opt);
+    });
+
+    // Add ghost 3D aircraft (if they exist)
+    const ghostIds = ['Ghost_080x', 'Ghost_090x', 'Ghost_110x', 'Ghost_120x'];
+    ghostIds.forEach(ghostId => {
+        const entityId = `${ghostId}-3d`;
+        const ent = viewerRef.entities.getById(entityId);
+        if (!ent) return;
+
+        const opt = document.createElement("option");
+        opt.value = entityId;
+        opt.textContent = ghostId.replace('_', ' ');  // "Ghost 090x"
         trackSelect.appendChild(opt);
     });
 }

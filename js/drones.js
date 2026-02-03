@@ -6,8 +6,8 @@
 // Set to false to disable features before deployment
 const FEATURES = {
     ghostPaths: true,
-    azElRays: true,
-    ambiguitySurface: true,
+    azElRays: false,
+    ambiguitySurface: false,
     followView: true,
     runwayCenterlines: true,
     reportingPoints: true,

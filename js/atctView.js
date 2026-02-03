@@ -15,10 +15,7 @@ let atctLon = null;
 let atctHeight = null;
 let atctPosition = null;
 
-let atctTrackingTarget = null;
-
 let atctViewEnabled = false;
-let atctTrackEnabled = false;
 
 let atctPanDeg = 155;
 let atctTiltDeg = 5;
@@ -48,18 +45,14 @@ let panel = null;
 let panSlider = null;
 let tiltSlider = null;
 let rangeSlider = null;
-let trackCheckbox = null;
 let snapRunwayBtn = null;
-let trackSelect = null;
 let heightSlider = null;
 let fovSlider = null;
 let fovModeLabel = null;
 
-import { AIRCRAFT_ORDER } from "./aircraftPanel.js";
 
 import { disableFollowView } from "./followView.js";
 
-import { get3DModelPosition } from "./drones.js";
 
 
 // ================== PUBLIC API (MODIFIED) ==================
@@ -185,49 +178,6 @@ function buildControlPanel() {
     headerRow.appendChild(title);
     headerRow.appendChild(closeBtn);
     panel.appendChild(headerRow);
-
-
-    // ================= TRACK AIRCRAFT DROPDOWN =================
-    const trackContainer = document.createElement("div");
-    trackContainer.style.marginBottom = "8px";
-
-    // TEMPORARY DISABLE:
-    // trackContainer.style.display = "none";   // ← hides whole dropdown
-
-    const trackLabel = document.createElement("div");
-    trackLabel.innerText = "Track Aircraft";
-    trackLabel.style.fontSize = "12px";
-    trackLabel.style.marginBottom = "2px";
-    trackContainer.appendChild(trackLabel);
-
-    trackSelect = document.createElement("select");
-    trackSelect.style.width = "100%";
-    trackSelect.style.fontSize = "12px";
-
-    // "(none)" option
-    const noTrack = document.createElement("option");
-    noTrack.value = "none";
-    noTrack.textContent = "(none)";
-    trackSelect.appendChild(noTrack);
-
-    // <-- DO NOT populate here (list will be empty)
-    // Instead, refresh when panel opens.
-
-    // Tracking change handler
-    // Tracking change handler
-    trackSelect.addEventListener("change", () => {
-        if (trackSelect.value === "none") {
-            atctTrackEnabled = false;
-            atctTrackingTarget = null;
-            enableSliders();  // Re-enable sliders
-        } else {
-            atctTrackEnabled = true;
-            atctTrackingTarget = trackSelect.value;
-            disableSliders();  // Disable sliders
-        }
-    });
-    trackContainer.appendChild(trackSelect);
-    panel.appendChild(trackContainer);
 
 
     // --- Snap Runway ---
@@ -456,10 +406,6 @@ function enableATCTView() {
     // Set default FOV (Human Eye 50°)
     resetFovToDefault();
 
-    // 🔥 Refresh dropdown NOW that aircraft exist
-    refreshTrackingList(trackSelect);
-
-
 
     const c = viewerRef.scene.screenSpaceCameraController;
     c.enableRotate = false;
@@ -510,63 +456,6 @@ function atctViewTick(clock) {
     let finalHeading = atctPanDeg;
     let finalPitch = atctTiltDeg;
 
-    // ---- TRACKING MODE ----
-    if (atctTrackEnabled && atctTrackingTarget) {
-        let targetCartesian = null;
-
-        // For primary aircraft, use stored position property (survives entity removal)
-        const primaryAircraft = ['N97CX', 'N160RA'];
-        let isPrimaryAircraft = false;
-
-        for (const baseId of primaryAircraft) {
-            if (atctTrackingTarget === baseId || atctTrackingTarget === `${baseId}-3d-model`) {
-                isPrimaryAircraft = true;
-
-                // First try the stored 3D model position (most reliable)
-                const storedPosition = get3DModelPosition(baseId);
-                if (storedPosition) {
-                    targetCartesian = storedPosition.getValue(clock.currentTime);
-                }
-
-                // Fallback to entity lookup
-                if (!targetCartesian) {
-                    const idsToTry = [`${baseId}-3d-model`, baseId];
-                    for (const entityId of idsToTry) {
-                        const ent = viewerRef.entities.getById(entityId);
-                        if (ent && ent.position) {
-                            targetCartesian = ent.position.getValue(clock.currentTime);
-                            if (targetCartesian) break;
-                        }
-                    }
-                }
-                break;
-            }
-        }
-
-        // For non-primary aircraft, use direct lookup
-        if (!isPrimaryAircraft) {
-            const drone = viewerRef.entities.getById(atctTrackingTarget);
-            if (drone && drone.position) {
-                targetCartesian = drone.position.getValue(clock.currentTime);
-            }
-        }
-
-        if (targetCartesian) {
-            // Calculate heading (azimuth) from tower to aircraft
-            finalHeading = computeBearing(atctPosition, targetCartesian);
-
-            // Calculate pitch (elevation angle) from tower to aircraft
-            finalPitch = computeElevationAngle(atctPosition, targetCartesian);
-
-            // Update module variables and UI sliders
-            atctPanDeg = finalHeading;
-            atctTiltDeg = finalPitch;
-
-            if (panSlider) panSlider.value = atctPanDeg;
-            if (tiltSlider) tiltSlider.value = atctTiltDeg;
-        }
-    }
-
 // ---- ALWAYS SET CAMERA VIEW ----
     // Calculate camera position with height offset
     const heightOffsetMeters = atctHeightOffsetFeet * 0.3048;  // Convert feet to meters
@@ -587,145 +476,3 @@ function atctViewTick(clock) {
     });
 }
 
-// ================== HELPER ==================
-
-function computeBearing(startCartesian, endCartesian) {
-    const s = Cesium.Cartographic.fromCartesian(startCartesian);
-    const e = Cesium.Cartographic.fromCartesian(endCartesian);
-
-    const dLon = e.longitude - s.longitude;
-    const y = Math.sin(dLon) * Math.cos(e.latitude);
-    const x = Math.cos(s.latitude) * Math.sin(e.latitude) -
-              Math.sin(s.latitude) * Math.cos(e.latitude) * Math.cos(dLon);
-
-    let b = Cesium.Math.toDegrees(Math.atan2(y, x));
-    return b < 0 ? b + 360 : b;
-}
-
-// ================== SLIDER STATE HELPERS ==================
-
-function disableSliders() {
-    if (panSlider) {
-        panSlider.disabled = true;
-        panSlider.style.opacity = "0.4";
-        panSlider.style.cursor = "not-allowed";
-    }
-
-    if (tiltSlider) {
-        tiltSlider.disabled = true;
-        tiltSlider.style.opacity = "0.4";
-        tiltSlider.style.cursor = "not-allowed";
-    }
-
-    if (heightSlider) {
-        heightSlider.disabled = true;
-        heightSlider.style.opacity = "0.4";
-        heightSlider.style.cursor = "not-allowed";
-    }
-
-    if (snapRunwayBtn) {
-        snapRunwayBtn.disabled = true;
-        snapRunwayBtn.style.opacity = "0.4";
-        snapRunwayBtn.style.cursor = "not-allowed";
-    }
-
-    // FOV slider stays enabled during tracking (user can adjust zoom)
-}
-
-function enableSliders() {
-    if (panSlider) {
-        panSlider.disabled = false;
-        panSlider.style.opacity = "1.0";
-        panSlider.style.cursor = "pointer";
-    }
-    
-    if (tiltSlider) {
-        tiltSlider.disabled = false;
-        tiltSlider.style.opacity = "1.0";
-        tiltSlider.style.cursor = "pointer";
-    }
-    
-    if (heightSlider) {
-        heightSlider.disabled = false;
-        heightSlider.style.opacity = "1.0";
-        heightSlider.style.cursor = "pointer";
-    }
-    
-    if (snapRunwayBtn) {
-        snapRunwayBtn.disabled = false;
-        snapRunwayBtn.style.opacity = "1.0";
-        snapRunwayBtn.style.cursor = "pointer";
-    }
-}
-
-function computeElevationAngle(towerCartesian, targetCartesian) {
-    // Convert positions to cartographic
-    const towerCarto = Cesium.Cartographic.fromCartesian(towerCartesian);
-    const targetCarto = Cesium.Cartographic.fromCartesian(targetCartesian);
-    
-    // Calculate the difference in height (altitude)
-    const deltaHeight = targetCarto.height - towerCarto.height;
-    
-    // Calculate surface distance between tower and target
-    const ellipsoid = Cesium.Ellipsoid.WGS84;
-    const surfaceDistance = ellipsoid.cartesianToCartographic(
-        Cesium.Cartesian3.subtract(targetCartesian, towerCartesian, new Cesium.Cartesian3())
-    );
-    
-    // Use Haversine formula for accurate surface distance
-    const dLat = targetCarto.latitude - towerCarto.latitude;
-    const dLon = targetCarto.longitude - towerCarto.longitude;
-    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-              Math.cos(towerCarto.latitude) * Math.cos(targetCarto.latitude) *
-              Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    const horizontalDistance = ellipsoid.maximumRadius * c;
-    
-    // Calculate elevation angle: arctan(height difference / horizontal distance)
-    const elevationAngleRad = Math.atan2(deltaHeight, horizontalDistance);
-    return Cesium.Math.toDegrees(elevationAngleRad);
-}
-
-function refreshTrackingList(trackSelect) {
-    // Clear existing entries except the first "(none)" option.
-    while (trackSelect.options.length > 1) {
-        trackSelect.remove(1);
-    }
-
-    // Primary aircraft (N97CX first, then N160RA)
-    const primaryAircraft = ['N97CX', 'N160RA'];
-
-    // Add N97CX and N160RA first at the top
-    primaryAircraft.forEach(baseId => {
-        // Check if either base or 3D model entity exists
-        const modelId = `${baseId}-3d-model`;
-        const modelEnt = viewerRef.entities.getById(modelId);
-        const baseEnt = viewerRef.entities.getById(baseId);
-
-        // Need at least one entity to exist
-        if (!modelEnt && !baseEnt) return;
-
-        // Always track using whichever entity exists (prefer 3D model for position)
-        const trackId = modelEnt ? modelId : baseId;
-
-        const opt = document.createElement("option");
-        opt.value = trackId;
-        opt.textContent = baseId;
-        trackSelect.appendChild(opt);
-    });
-
-    // Add remaining aircraft following the AIRCRAFT_ORDER list
-    AIRCRAFT_ORDER.forEach(id => {
-        // Skip primary aircraft - already added above
-        if (primaryAircraft.includes(id)) return;
-
-        const ent = viewerRef.entities.getById(id);
-        if (!ent) return;
-
-        const opt = document.createElement("option");
-        opt.value = id;
-        opt.textContent = id;
-        trackSelect.appendChild(opt);
-    });
-
-}

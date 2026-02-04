@@ -200,8 +200,8 @@ let lastProcessedTimeMs = 0;    // Rewind detection: last simulation time proces
 // Tracks consecutive seconds each target has met TA/PA criteria
 const threatPersistence = {
     history: {},        // { targetId: { level, startTime, lastTime, confirmedTime } }
-    threshold: 0,       // Seconds required before upgrading to TA (0 = disabled)
-    paThreshold: 2,     // Seconds required before upgrading to PA (0 = disabled)
+    threshold: 1,       // Seconds required before upgrading to TA (0 = disabled)
+    paThreshold: 1,     // Seconds required before upgrading to PA (0 = disabled)
     holdDuration: 6000, // ms - minimum TA display time per DO-317B (6 seconds)
     maxAge: 10000,      // ms - remove stale entries older than this
 };
@@ -2494,8 +2494,8 @@ function exportCDTIData() {
                 horiz_tau_trigger: threatResult.tauTrigger ? 1 : 0,
                 vert_tau_trigger: threatResult.vertTauTrigger ? 1 : 0,
                 alert_basis: alertBasis.join('+') || 'NONE',
-                threat_level_raw: rawLevel,
-                threat_level_filtered: filteredLevel,
+                threat_raw: rawLevel,
+                threat_persist: filteredLevel,
                 sensitivity_level: threatResult.sensitivityLevel,
                 sensitivity_phase: threatResult.sensitivityPhase,
                 sensitivity_source: threatResult.sensitivitySource,
@@ -2503,7 +2503,7 @@ function exportCDTIData() {
                 diverging: divergenceResult.isDiverging ? 1 : 0,
                 divergence_count: divergenceResult.divergenceCount,
                 divergence_suppressed: divergenceResult.suppressed ? 1 : 0,
-                threat_level_final: finalLevel
+                threat_final: finalLevel
             });
         });
     }
@@ -2558,8 +2558,8 @@ function exportToCSV(data) {
         'horiz_tau_trigger',
         'vert_tau_trigger',
         'alert_basis',
-        'threat_level_raw',
-        'threat_level_filtered',
+        'threat_raw',
+        'threat_persist',
         'sensitivity_level',
         'sensitivity_phase',
         'sensitivity_source',
@@ -2567,7 +2567,7 @@ function exportToCSV(data) {
         'diverging',
         'divergence_count',
         'divergence_suppressed',
-        'threat_level_final'
+        'threat_final'
     ];
 
     // Excel-friendly headers (for second row)
@@ -2604,8 +2604,8 @@ function exportToCSV(data) {
         'Horiz TAU Trigger',
         'Vert TAU Trigger',
         'Alert Basis',
-        'Threat Level Raw',
-        'Threat Level Filtered',
+        'Threat [raw]',
+        'Threat [persist]',
         'Sensitivity Level',
         'Sensitivity Phase',
         'Sensitivity Source',
@@ -2613,7 +2613,7 @@ function exportToCSV(data) {
         'Diverging',
         'Divergence Count',
         'Divergence Suppressed',
-        'Threat Level Final'
+        'Threat [final]'
     ];
 
     let csv = headers.join(',') + '\n';

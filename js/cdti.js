@@ -723,35 +723,31 @@ function bearingToClockPosition(relBearingDeg) {
 }
 
 /**
- * Determine vertical position callout (Low, High, or omitted)
- * Uses ±850ft threshold - within that range, no vertical callout
+ * Determine vertical position callout (Low, High, or Same Altitude)
+ * Uses ±400ft threshold
  * @param {number} relAltFt - Relative altitude in feet (target - ownship)
- * @returns {string|null} "Low", "High", or null if within ±850ft
+ * @returns {string} "Low", "High", or "Same Altitude"
  */
 function getVerticalPosition(relAltFt) {
-    if (relAltFt > 850) return 'High';
-    if (relAltFt < -850) return 'Low';
-    return null;  // Within ±850ft - no vertical callout
+    if (relAltFt > 400) return 'High';
+    if (relAltFt < -400) return 'Low';
+    return 'Same Altitude';
 }
 
 /**
  * Bin distance to callout values
- * Sub-mile: 0.3, 0.6 nm; then integer nm 1-16; cap at 16+
- * Max tau-based TA range ~12nm (900kt head-on closure, 48s tau)
+ * ≤0.85nm returns "Less than a mile", otherwise rounded integer miles
  * @param {number} distanceNm - Actual distance in nautical miles
  * @returns {string} Binned distance string
  */
 function binDistance(distanceNm) {
-    if (distanceNm <= 0.3) return '0.3';
-    if (distanceNm <= 0.6) return '0.6';
-    if (distanceNm > 16) return '16+';
+    if (distanceNm <= 0.85) return 'Less than a mile';
     return String(Math.round(distanceNm));
 }
 
 /**
  * Build the GDL 88 CSA aural alert message
- * Format: "Traffic! X O'clock, [Low/High,] X Miles"
- * Vertical callout omitted if within ±850ft
+ * Format: "Traffic! X O'clock, [Low|High|Same Altitude], [Less than a mile|X Miles]"
  *
  * @param {number} relX - Relative East position in nm
  * @param {number} relY - Relative North position in nm
@@ -768,15 +764,14 @@ function buildTAAlertMessage(relX, relY, ownHeading, relAltFt, distanceNm) {
 
     const clock = bearingToClockPosition(relBearing);
     const vertical = getVerticalPosition(relAltFt);
-    const miles = binDistance(distanceNm);
-    const mileWord = miles === '1' ? 'Mile' : 'Miles';
+    const distance = binDistance(distanceNm);
 
-    // Build message - omit vertical if within ±850ft
-    if (vertical) {
-        return `Traffic! ${clock} O'clock, ${vertical}, ${miles} ${mileWord}`;
-    } else {
-        return `Traffic! ${clock} O'clock, ${miles} ${mileWord}`;
-    }
+    // Distance phrasing: "Less than a mile" or "X Miles"
+    const distancePhrase = distance === 'Less than a mile'
+        ? distance
+        : `${distance} ${distance === '1' ? 'Mile' : 'Miles'}`;
+
+    return `Traffic! ${clock} O'clock, ${vertical}, ${distancePhrase}`;
 }
 
 /**

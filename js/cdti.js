@@ -151,7 +151,7 @@ const CDTI_CONFIG = {
     showDirectionalArrows: true,   // Show heading arrows inside traffic symbols
     // DO-317B Divergence Test configuration
     divergenceTestEnabled: true,       // Enable TA suppression when target is diverging
-    divergenceThreshold: 3,            // Consecutive seconds of divergence required to suppress TA
+    divergenceThreshold: 0,            // Consecutive seconds of divergence required to suppress TA
     divergenceMode: 'HORIZONTAL',      // 'HORIZONTAL' (closureRate < 0) or 'COMBINED' (horiz AND vert)
 };
 
@@ -199,10 +199,11 @@ let lastProcessedTimeMs = 0;    // Rewind detection: last simulation time proces
 // Threat persistence tracking (sequential verification per DO-317B)
 // Tracks consecutive seconds each target has met TA/PA criteria
 const threatPersistence = {
-    history: {},        // { targetId: { level, startTime, lastTime, confirmedTime } }
-    threshold: 1,       // Seconds required before upgrading to TA (0 = disabled)
-    paThreshold: 1,     // Seconds required before upgrading to PA (0 = disabled)
-    holdDuration: 6000, // ms - minimum TA display time per DO-317B (6 seconds)
+    history: {},        // { targetId: { level, startTime, lastTime, confirmedTime, paConfirmedTime } }
+    threshold: 0,       // Seconds required before upgrading to TA (0 = disabled)
+    paThreshold: 0,     // Seconds required before upgrading to PA (0 = disabled)
+    holdDuration: 2400, // ms - minimum TA display time per DO-317B (6 seconds)
+    paHoldDuration: 2400,  // ms - minimum PA display time (0 = disabled)
     maxAge: 10000,      // ms - remove stale entries older than this
 };
 
@@ -480,7 +481,7 @@ function applyThreatPersistence(targetId, rawLevel, currentTimeMs) {
 
     // Get or create history entry for this target
     if (!history[targetId]) {
-        history[targetId] = { level: 'OTHER', startTime: 0, lastTime: currentTimeMs, confirmedTime: 0 };
+        history[targetId] = { level: 'OTHER', startTime: 0, lastTime: currentTimeMs, confirmedTime: 0, paConfirmedTime: 0 };
     }
     const entry = history[targetId];
 
@@ -506,6 +507,7 @@ function applyThreatPersistence(targetId, rawLevel, currentTimeMs) {
             if (!entry.confirmedTime) {
                 entry.confirmedTime = currentTimeMs;
             }
+            entry.paConfirmedTime = 0;  // Clear PA hold — target is now at TA level
             return rawLevel;
         } else {
             // Not enough elapsed time — show PA instead of TA
@@ -534,11 +536,22 @@ function applyThreatPersistence(targetId, rawLevel, currentTimeMs) {
             }
             const elapsedMs = currentTimeMs - entry.startTime;
             if (paThreshold === 0 || elapsedMs >= paThreshold * 1000) {
+                if (!entry.paConfirmedTime) {
+                    entry.paConfirmedTime = currentTimeMs;
+                }
                 return 'PA';
             } else {
                 return 'OTHER';
             }
         }
+
+        // PA hold: maintain PA for paHoldDuration after it was confirmed
+        const paHoldDuration = threatPersistence.paHoldDuration;
+        if (entry.paConfirmedTime > 0 && (currentTimeMs - entry.paConfirmedTime) < paHoldDuration) {
+            return 'PA';
+        }
+        // PA hold expired or never confirmed — reset
+        entry.paConfirmedTime = 0;
 
         // OTHER — reset tracking
         entry.level = rawLevel;
@@ -861,7 +874,7 @@ function updateTAAudioAlerts(taTargetsById, ownHeading, currentTimeMs, ownshipAl
             target.relAltFt,
             target.distance
         );
-        speakTAAlert(message);
+        speakTAAlert(message);  // speak speech alert toggle
     });
 
     lastTAIds = currentIds;
@@ -2664,6 +2677,7 @@ function exportToCSV(data) {
         `Threat Persistence (TA): ${threatPersistence.threshold === 0 ? 'DISABLED' : threatPersistence.threshold + 's'}`,
         `Threat Persistence (PA): ${threatPersistence.paThreshold === 0 ? 'DISABLED' : threatPersistence.paThreshold + 's'}`,
         `TA Hold Duration: ${threatPersistence.holdDuration} ms`,
+        `PA Hold Duration: ${threatPersistence.paHoldDuration} ms`,
         ``,
         `Divergence Test: ${CDTI_CONFIG.divergenceTestEnabled ? 'ENABLED' : 'DISABLED'}`,
         `Divergence Threshold: ${CDTI_CONFIG.divergenceThreshold}s consecutive`,

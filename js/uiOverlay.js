@@ -14,6 +14,7 @@ let projectLabel = null;
 let viewerRef = null;
 
 let cameraExpanded = false;
+let cameraInputs = {};  // { lat, lon, alt, hdg, pitch, roll } input elements
 
 // Geoid offset for converting ellipsoid height to MSL
 // At VGT: MSL = Ellipsoid - 91.9 ft (or Ellipsoid + GEOID_OFFSET where GEOID_OFFSET = -91.9)
@@ -126,8 +127,63 @@ function createCameraPanel() {
     cameraContent.style.display = "none";
     cameraContent.style.padding = "6px 10px 10px 10px";
     cameraContent.style.borderTop = "1px solid #444";
+    // Create labeled input fields
+    const fields = [
+        { key: 'lat',   label: 'Lat' },
+        { key: 'lon',   label: 'Lon' },
+        { key: 'alt',   label: 'Alt MSL ft' },
+        { key: 'hdg',   label: 'Hdg' },
+        { key: 'pitch', label: 'Pitch' },
+        { key: 'roll',  label: 'Roll' },
+    ];
+    fields.forEach(({ key, label }) => {
+        const row = document.createElement("div");
+        row.style.display = "flex";
+        row.style.justifyContent = "space-between";
+        row.style.alignItems = "center";
+        row.style.marginBottom = "4px";
+
+        const lbl = document.createElement("span");
+        lbl.textContent = label + ":";
+        lbl.style.color = "#888";
+        lbl.style.marginRight = "6px";
+
+        const input = document.createElement("input");
+        input.type = "text";
+        input.size = 12;
+        input.style.fontFamily = "monospace";
+        input.style.fontSize = "12px";
+        input.style.background = "#1a1a1a";
+        input.style.color = "#ddd";
+        input.style.border = "1px solid #444";
+        input.style.borderRadius = "3px";
+        input.style.padding = "2px 4px";
+        input.style.textAlign = "right";
+
+        row.appendChild(lbl);
+        row.appendChild(input);
+        cameraContent.appendChild(row);
+        cameraInputs[key] = input;
+    });
+
+    // Apply / Fly To button
+    const applyBtn = document.createElement("button");
+    applyBtn.textContent = "Fly To";
+    applyBtn.style.width = "100%";
+    applyBtn.style.marginTop = "6px";
+    applyBtn.style.padding = "4px 0";
+    applyBtn.style.fontFamily = "monospace";
+    applyBtn.style.fontSize = "12px";
+    applyBtn.style.background = "#333";
+    applyBtn.style.color = "#ccc";
+    applyBtn.style.border = "1px solid #555";
+    applyBtn.style.borderRadius = "3px";
+    applyBtn.style.cursor = "pointer";
+    applyBtn.addEventListener("click", applyCameraPosition);
+    cameraContent.appendChild(applyBtn);
+
     cameraPanel.appendChild(cameraContent);
-    
+
     // Toggle on click
     header.addEventListener("click", () => {
         cameraExpanded = !cameraExpanded;
@@ -143,56 +199,49 @@ function createCameraPanel() {
 
 function updateCameraInfo() {
     if (!cameraContent || !cameraExpanded) return;
-    
+    // Skip updates if user is editing any field
+    if (document.activeElement && cameraContent.contains(document.activeElement)) return;
+
     const camera = viewerRef.camera;
     const cartographic = camera.positionCartographic;
-    
-    // Position
     const lon = Cesium.Math.toDegrees(cartographic.longitude);
     const lat = Cesium.Math.toDegrees(cartographic.latitude);
-    const altEllipsoidM = cartographic.height;
-    const altEllipsoidFt = altEllipsoidM * 3.28084;
-    
-    // Convert ellipsoid height to MSL
-    // At VGT: geoid is ~92 ft below ellipsoid, so MSL = ellipsoid + 92
-    // GEOID_OFFSET_FT = -91.9, so MSL = ellipsoid - GEOID_OFFSET_FT
-    const altMSLFt = altEllipsoidFt - GEOID_OFFSET_FT;  // Subtracting -91.9 = adding 91.9
-    
-    // Orientation (convert to degrees)
+    const altMSLFt = cartographic.height * 3.28084 - GEOID_OFFSET_FT;
     const heading = Cesium.Math.toDegrees(camera.heading);
     const pitch = Cesium.Math.toDegrees(camera.pitch);
     const roll = Cesium.Math.toDegrees(camera.roll);
-    
-    // Format altitude display (using MSL)
-    let altDisplay;
-    if (altMSLFt > 100000) {
-        altDisplay = `${(altMSLFt / 5280).toFixed(1)} mi`;
-    } else if (altMSLFt > 10000) {
-        altDisplay = `${(altMSLFt / 1000).toFixed(1)}k ft`;
-    } else {
-        altDisplay = `${altMSLFt.toFixed(0)} ft`;
-    }
-    
-    cameraContent.innerHTML = `
-        <div style="margin-bottom: 4px;">
-            <span style="color: #888;">Lat:</span> ${lat.toFixed(6)}°
-        </div>
-        <div style="margin-bottom: 4px;">
-            <span style="color: #888;">Lon:</span> ${lon.toFixed(6)}°
-        </div>
-        <div style="margin-bottom: 4px;">
-            <span style="color: #888;">Alt (MSL):</span> ${altDisplay}
-        </div>
-        <div style="margin-bottom: 4px;">
-            <span style="color: #888;">Hdg:</span> ${heading.toFixed(1)}°
-        </div>
-        <div style="margin-bottom: 4px;">
-            <span style="color: #888;">Pitch:</span> ${pitch.toFixed(1)}°
-        </div>
-        <div>
-            <span style="color: #888;">Roll:</span> ${roll.toFixed(1)}°
-        </div>
-    `;
+
+    cameraInputs.lat.value = lat.toFixed(6);
+    cameraInputs.lon.value = lon.toFixed(6);
+    cameraInputs.alt.value = altMSLFt.toFixed(0);
+    cameraInputs.hdg.value = heading.toFixed(1);
+    cameraInputs.pitch.value = pitch.toFixed(1);
+    cameraInputs.roll.value = roll.toFixed(1);
+}
+
+function applyCameraPosition() {
+    const lat = parseFloat(cameraInputs.lat.value);
+    const lon = parseFloat(cameraInputs.lon.value);
+    const altMSLFt = parseFloat(cameraInputs.alt.value);
+    const hdg = parseFloat(cameraInputs.hdg.value);
+    const pitch = parseFloat(cameraInputs.pitch.value);
+    const roll = parseFloat(cameraInputs.roll.value);
+
+    if ([lat, lon, altMSLFt, hdg, pitch, roll].some(isNaN)) return;
+
+    // Convert MSL feet back to ellipsoid meters
+    const altEllipsoidFt = altMSLFt + GEOID_OFFSET_FT;
+    const altMeters = altEllipsoidFt * 0.3048;
+
+    viewerRef.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(lon, lat, altMeters),
+        orientation: {
+            heading: Cesium.Math.toRadians(hdg),
+            pitch: Cesium.Math.toRadians(pitch),
+            roll: Cesium.Math.toRadians(roll)
+        },
+        duration: 1.0
+    });
 }
 
 // ================== PROJECT LABEL ==================

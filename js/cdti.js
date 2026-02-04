@@ -200,8 +200,8 @@ let lastProcessedTimeMs = 0;    // Rewind detection: last simulation time proces
 // Tracks consecutive seconds each target has met TA/PA criteria
 const threatPersistence = {
     history: {},        // { targetId: { level, startTime, lastTime, confirmedTime } }
-    threshold: 2,       // Seconds required before upgrading to TA (0 = disabled)
-    paThreshold: 1,     // Seconds required before upgrading to PA (0 = disabled)
+    threshold: 0,       // Seconds required before upgrading to TA (0 = disabled)
+    paThreshold: 2,     // Seconds required before upgrading to PA (0 = disabled)
     holdDuration: 6000, // ms - minimum TA display time per DO-317B (6 seconds)
     maxAge: 10000,      // ms - remove stale entries older than this
 };
@@ -216,7 +216,7 @@ const divergenceTracking = {
 // Altitude smoothing (3-point moving average to reduce ADS-B jitter)
 const altitudeSmoothing = {
     history: {},        // { targetId: [alt1, alt2, alt3] } - recent altitude readings
-    windowSize: 5,      // Number of samples to average
+    windowSize: 1,      // Number of samples to average
     maxAge: 5000,       // ms - remove stale entries older than this
 };
 
@@ -2643,6 +2643,40 @@ function exportToCSV(data) {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+
+    // Download configuration summary as companion .txt file
+    const configLines = [
+        `CDTI Export Configuration Summary`,
+        `Generated: ${new Date().toISOString()}`,
+        ``,
+        `Ownship: ${CDTI_CONFIG.ownshipID}`,
+        `Display Range: ${CDTI_CONFIG.maxRange} nm`,
+        `Update Interval: ${CDTI_CONFIG.updateInterval} ms`,
+        ``,
+        `Altitude Smoothing: window=${altitudeSmoothing.windowSize} samples`,
+        `Altitude Filter Mode: ${CDTI_CONFIG.altitudeFilter}`,
+        ``,
+        `TAU Alerting: ${CDTI_CONFIG.tauEnabled ? 'ENABLED' : 'DISABLED'}`,
+        `GDL 88 Sensitivity: ${CDTI_CONFIG.useGDL88Sensitivity ? 'ENABLED' : 'DISABLED'} (HAT available=${CDTI_CONFIG.hatAvailable}${CDTI_CONFIG.hatAvailable ? ', elevation=' + CDTI_CONFIG.kvgtElevation + ' ft' : ''})`,
+        `GPS Phase: ${CDTI_CONFIG.gpsPhase}`,
+        `Default TAU: threshold=${CDTI_CONFIG.tauThreshold}s, dist=${CDTI_CONFIG.tauDistanceThreshold} nm, alt=${CDTI_CONFIG.tauAltitudeThreshold} ft`,
+        ``,
+        `Threat Persistence (TA): ${threatPersistence.threshold === 0 ? 'DISABLED' : threatPersistence.threshold + 's'}`,
+        `Threat Persistence (PA): ${threatPersistence.paThreshold === 0 ? 'DISABLED' : threatPersistence.paThreshold + 's'}`,
+        `TA Hold Duration: ${threatPersistence.holdDuration} ms`,
+        ``,
+        `Divergence Test: ${CDTI_CONFIG.divergenceTestEnabled ? 'ENABLED' : 'DISABLED'}`,
+        `Divergence Threshold: ${CDTI_CONFIG.divergenceThreshold}s consecutive`,
+        `Divergence Mode: ${CDTI_CONFIG.divergenceMode}`,
+    ];
+    const configBlob = new Blob([configLines.join('\n') + '\n'], { type: 'text/plain;charset=utf-8;' });
+    const configLink = document.createElement('a');
+    configLink.setAttribute('href', URL.createObjectURL(configBlob));
+    configLink.setAttribute('download', `cdti_log_${timestamp}_config.txt`);
+    configLink.style.visibility = 'hidden';
+    document.body.appendChild(configLink);
+    configLink.click();
+    document.body.removeChild(configLink);
 
     // console.log(`CDTI Export: CSV downloaded with ${data.length} events`);
 }

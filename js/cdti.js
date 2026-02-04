@@ -134,6 +134,7 @@ const CDTI_CONFIG = {
     altitudeFilter: 'NORMAL',      // Current altitude filter mode
     verticalRateThreshold: 500,    // fpm - threshold for trend arrows
     showUTCClock: true,            // Toggle UTC clock display for screen capture
+    voiceName: 'Nathan (Enhanced)', // Speech synthesis voice name (null = browser default)
     // TAU (time-based) alerting thresholds (defaults, overridden by GDL88 sensitivity)
     tauEnabled: true,              // Enable TAU-based TA alerting
     tauThreshold: 20,              // seconds - default, overridden by sensitivity level
@@ -822,6 +823,11 @@ function speakTAAlert(message) {
     if (!('speechSynthesis' in window)) return;
     const utterance = new SpeechSynthesisUtterance(message);
     utterance.rate = 0.85;
+    if (CDTI_CONFIG.voiceName) {
+        const voices = window.speechSynthesis.getVoices();
+        const voice = voices.find(v => v.name === CDTI_CONFIG.voiceName);
+        if (voice) utterance.voice = voice;
+    }
     window.speechSynthesis.speak(utterance);
 }
 

@@ -134,7 +134,7 @@ const CDTI_CONFIG = {
     altitudeFilter: 'NORMAL',      // Current altitude filter mode
     verticalRateThreshold: 500,    // fpm - threshold for trend arrows
     showUTCClock: true,            // Toggle UTC clock display for screen capture
-    voiceName: 'Nathan (Enhanced)', // Speech synthesis voice name (null = browser default)
+    voiceName: 'Reed (English (US))', // Speech synthesis voice name (null = browser default)
     // TAU (time-based) alerting thresholds (defaults, overridden by GDL88 sensitivity)
     tauEnabled: true,              // Enable TAU-based TA alerting
     tauThreshold: 20,              // seconds - default, overridden by sensitivity level

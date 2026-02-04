@@ -169,7 +169,7 @@ const testBonanzaEntity = viewer.entities.add({
     orientation: bonanzaOrientation,
     show: false,  // Hidden by default
     model: {
-        uri: 'js/models/PropJet/PropJet_NoProp.glb',
+        uri: 'js/models/PropJet/PropJetNoPropNoGear_Alan.glb',
         minimumPixelSize: 32,
         scale: TEST_AIRCRAFT_CONFIG.scale,
         maximumScale: 20000
@@ -209,7 +209,7 @@ import { loadHPBData, getOrientation, isHPBLoaded } from './hpbOrientationData.j
 // by KOG_THORNS (https://sketchfab.com/ioai25312) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
 const MODEL_CONFIG = {
     N97CX: {
-        modelUri: 'js/models/PropJet/PropJet_NoProp.glb',
+        modelUri: 'js/models/PropJet/PropJetNoPropNoGear_Alan.glb',
         scale: 0.809,  // Scaled to PA-46 Meridian wingspan (43 ft / 13.11m)
         label: 'N97CX 3D',
         color: '#FF6B6B',

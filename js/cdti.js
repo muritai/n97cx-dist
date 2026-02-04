@@ -815,6 +815,25 @@ function updateTAAlertDisplay(message, currentTimeMs) {
 }
 
 /**
+ * Cached speech synthesis voice (loaded asynchronously)
+ */
+let cachedVoice = null;
+let voicesLoaded = false;
+
+// Preload voices when available (Firefox loads them asynchronously)
+if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    const loadVoices = () => {
+        const voices = window.speechSynthesis.getVoices();
+        if (voices.length > 0 && CDTI_CONFIG.voiceName) {
+            cachedVoice = voices.find(v => v.name === CDTI_CONFIG.voiceName) || null;
+            voicesLoaded = true;
+        }
+    };
+    loadVoices();
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+}
+
+/**
  * Speak TA alert message using Web Speech API (queued, low load)
  * @param {string} message - Alert message to speak
  */
@@ -823,11 +842,7 @@ function speakTAAlert(message) {
     if (!('speechSynthesis' in window)) return;
     const utterance = new SpeechSynthesisUtterance(message);
     utterance.rate = 0.85;
-    if (CDTI_CONFIG.voiceName) {
-        const voices = window.speechSynthesis.getVoices();
-        const voice = voices.find(v => v.name === CDTI_CONFIG.voiceName);
-        if (voice) utterance.voice = voice;
-    }
+    if (cachedVoice) utterance.voice = cachedVoice;
     window.speechSynthesis.speak(utterance);
 }
 

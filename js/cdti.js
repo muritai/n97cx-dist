@@ -141,6 +141,7 @@ const CDTI_CONFIG = {
     tauAltitudeThreshold: 850,     // ft - default, overridden by sensitivity level
     // GDL 88 altitude-based sensitivity
     useGDL88Sensitivity: true,     // Use altitude-based sensitivity levels from Table 4-2
+    showSensitivityInfo: true,     // Show sensitivity level info in top-left corner
     hatAvailable: true,            // Whether HAT (Height Above Terrain) is available
     gpsPhase: 'NONE',              // GPS flight phase: 'APPROACH', 'TERMINAL', 'NONE'
     kvgtElevation: 2113.5,         // KVGT airport ellipsoidal elevation for HAT calculation (ft MSL)
@@ -1188,7 +1189,7 @@ function drawCDTI() {
     ctx.fillText(`${Math.round(ownHeading).toString().padStart(3, '0')} TRUE`, center, 20);
 
     // Draw GDL 88 sensitivity level indicator (top-left)
-    if (CDTI_CONFIG.useGDL88Sensitivity) {
+    if (CDTI_CONFIG.useGDL88Sensitivity && CDTI_CONFIG.showSensitivityInfo) {
         const hat = ownship.alt - CDTI_CONFIG.kvgtElevation;
         const sensitivity = getSensitivityLevel(ownship.alt, hat);
         ctx.fillStyle = '#0f0';

@@ -134,7 +134,7 @@ const CDTI_CONFIG = {
     altitudeFilter: 'NORMAL',      // Current altitude filter mode
     verticalRateThreshold: 500,    // fpm - threshold for trend arrows
     showUTCClock: true,            // Toggle UTC clock display for screen capture
-    voiceName: 'Reed (English (US))', // Speech synthesis voice name (null = browser default)
+    voiceName: 'Samantha',          // Speech synthesis voice name (null = browser default)
     // TAU (time-based) alerting thresholds (defaults, overridden by GDL88 sensitivity)
     tauEnabled: true,              // Enable TAU-based TA alerting
     tauThreshold: 20,              // seconds - default, overridden by sensitivity level
@@ -142,7 +142,7 @@ const CDTI_CONFIG = {
     tauAltitudeThreshold: 850,     // ft - default, overridden by sensitivity level
     // GDL 88 altitude-based sensitivity
     useGDL88Sensitivity: true,     // Use altitude-based sensitivity levels from Table 4-2
-    showSensitivityInfo: true,     // Show sensitivity level info in top-left corner
+    showSensitivityInfo: false,     // Show sensitivity level info in top-left corner
     hatAvailable: true,            // Whether HAT (Height Above Terrain) is available
     gpsPhase: 'NONE',              // GPS flight phase: 'APPROACH', 'TERMINAL', 'NONE'
     kvgtElevation: 2113.5,         // KVGT airport ellipsoidal elevation for HAT calculation (ft MSL)

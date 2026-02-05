@@ -77,9 +77,9 @@ const DEBUG = false;
 
 const GROUND_GEOID_OFFSET_FT = -91.9; // in feet
 
-const centerLon = -115.189259;
-const centerLat = 36.206500;
-const centerAlt = 10000;
+const centerLon = -115.195000; // -115.189259
+const centerLat = 36.212500; //  36.206500
+const centerAlt = 32000/3.28084; //  10000
 
 const ATCTLat = 36.210167;
 const ATCTLon = -115.189259;

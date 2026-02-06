@@ -121,12 +121,18 @@ function hideN97CXVisuals() {
     }
 
     // Keep 3D model visible for tail view (camera is behind aircraft)
-    const model3DId = `${FOLLOW_TARGET}-3d-model`;
-    const model3D = viewerRef.entities.getById(model3DId);
-    // console.log(`  Looking for 3D model: ${model3DId}, found: ${!!model3D}`);
-    if (model3D) {
-        model3D.show = true;  // Keep visible for tail view
-        // console.log("  Showing 3D model for tail view");
+    // Handle both single entity and dual-entity gear swap
+    const model3DIds = [
+        `${FOLLOW_TARGET}-3d-model`,          // Legacy single entity
+        `${FOLLOW_TARGET}-3d-model-geardown`, // Gear down entity
+        `${FOLLOW_TARGET}-3d-model-gearup`    // Gear up entity
+    ];
+
+    for (const model3DId of model3DIds) {
+        const model3D = viewerRef.entities.getById(model3DId);
+        if (model3D) {
+            model3D.show = true;  // Keep visible for tail view
+        }
     }
 
     const historyLine = viewerRef.entities.getById(`history-${FOLLOW_TARGET}`);
@@ -148,10 +154,18 @@ function showN97CXVisuals() {
         drone.show = true;
     }
 
-    // Restore the 3D model entity
-    const model3D = viewerRef.entities.getById(`${FOLLOW_TARGET}-3d-model`);
-    if (model3D) {
-        model3D.show = true;
+    // Restore the 3D model entities (handle dual-entity gear swap)
+    const model3DIds = [
+        `${FOLLOW_TARGET}-3d-model`,          // Legacy single entity
+        `${FOLLOW_TARGET}-3d-model-geardown`, // Gear down entity
+        `${FOLLOW_TARGET}-3d-model-gearup`    // Gear up entity
+    ];
+
+    for (const model3DId of model3DIds) {
+        const model3D = viewerRef.entities.getById(model3DId);
+        if (model3D) {
+            model3D.show = true;
+        }
     }
 
     const historyLine = viewerRef.entities.getById(`history-${FOLLOW_TARGET}`);
@@ -211,12 +225,19 @@ function disableFollow() {
         originalFOV = null;
     }
 
-    // Restore original position property for 3D model
+    // Restore original position property for 3D model (handle dual-entity gear swap)
     if (originalModelPositionProperty) {
-        const model3D = viewerRef.entities.getById(`${FOLLOW_TARGET}-3d-model`);
-        if (model3D) {
-            model3D.position = originalModelPositionProperty;
-            // console.log('Restored original position property for N97CX 3D model');
+        const model3DIds = [
+            `${FOLLOW_TARGET}-3d-model`,          // Legacy single entity
+            `${FOLLOW_TARGET}-3d-model-geardown`, // Gear down entity
+            `${FOLLOW_TARGET}-3d-model-gearup`    // Gear up entity
+        ];
+
+        for (const model3DId of model3DIds) {
+            const model3D = viewerRef.entities.getById(model3DId);
+            if (model3D) {
+                model3D.position = originalModelPositionProperty;
+            }
         }
         originalModelPositionProperty = null;
     }
@@ -233,10 +254,17 @@ function disableFollow() {
 function onFollowTick(clock) {
     if (!followEnabled) return;
 
-    // Ensure N97CX model stays visible for tail view (in case 3D was disabled after follow started)
-    const model3D = viewerRef.entities.getById(`${FOLLOW_TARGET}-3d-model`);
-    if (model3D && !model3D.show) {
-        model3D.show = true;
+    // Ensure N97CX model stays visible for tail view (handle dual-entity gear swap)
+    const model3DIds = [
+        `${FOLLOW_TARGET}-3d-model`,
+        `${FOLLOW_TARGET}-3d-model-geardown`,
+        `${FOLLOW_TARGET}-3d-model-gearup`
+    ];
+    for (const model3DId of model3DIds) {
+        const model3D = viewerRef.entities.getById(model3DId);
+        if (model3D && !model3D.show) {
+            model3D.show = true;
+        }
     }
 
     updateFollowCamera(clock, FOLLOW_TARGET);
@@ -246,10 +274,17 @@ function onFollowTick(clock) {
 function onFollowPreRender(scene, time) {
     if (!followEnabled) return;
 
-    // Ensure N97CX model stays visible for tail view
-    const model3D = viewerRef.entities.getById(`${FOLLOW_TARGET}-3d-model`);
-    if (model3D && !model3D.show) {
-        model3D.show = true;
+    // Ensure N97CX model stays visible for tail view (handle dual-entity gear swap)
+    const model3DIds = [
+        `${FOLLOW_TARGET}-3d-model`,
+        `${FOLLOW_TARGET}-3d-model-geardown`,
+        `${FOLLOW_TARGET}-3d-model-gearup`
+    ];
+    for (const model3DId of model3DIds) {
+        const model3D = viewerRef.entities.getById(model3DId);
+        if (model3D && !model3D.show) {
+            model3D.show = true;
+        }
     }
 
     // Use the viewer's clock for the update
@@ -356,22 +391,31 @@ export function updateFollowCamera(clock, droneID = "N97CX") {
     // === Let model use its original position property ===
     // Don't try to override - just let camera and model both use the same raw data source
     // The camera computes offset from `pos` which comes from the same SampledPositionProperty
-    const model3D = viewerRef.entities.getById(`${droneID}-3d-model`);
-    if (model3D && model3D.show) {
-        // Just update orientation - let position come from original SampledPositionProperty
-        const config = getModelConfig(droneID);
-        if (config) {
-            const adjustedHeading = headingDeg + (config.headingOffset || 0);
-            const adjustedPitch = pitchDeg * (config.pitchMultiplier || 1);
-            const adjustedRoll = bankDeg * (config.rollMultiplier || 1);
+    // Handle dual-entity gear swap for N97CX
+    const model3DIds = [
+        `${droneID}-3d-model`,          // Legacy single entity
+        `${droneID}-3d-model-geardown`, // Gear down entity
+        `${droneID}-3d-model-gearup`    // Gear up entity
+    ];
 
-            const modelHpr = new Cesium.HeadingPitchRoll(
-                Cesium.Math.toRadians(adjustedHeading),
-                Cesium.Math.toRadians(adjustedPitch),
-                Cesium.Math.toRadians(adjustedRoll)
-            );
-            // Use `pos` (raw position from SampledPositionProperty) for orientation calc
-            model3D.orientation = Cesium.Transforms.headingPitchRollQuaternion(pos, modelHpr);
+    const config = getModelConfig(droneID);
+    if (config) {
+        const adjustedHeading = headingDeg + (config.headingOffset || 0);
+        const adjustedPitch = pitchDeg * (config.pitchMultiplier || 1);
+        const adjustedRoll = bankDeg * (config.rollMultiplier || 1);
+
+        const modelHpr = new Cesium.HeadingPitchRoll(
+            Cesium.Math.toRadians(adjustedHeading),
+            Cesium.Math.toRadians(adjustedPitch),
+            Cesium.Math.toRadians(adjustedRoll)
+        );
+
+        for (const model3DId of model3DIds) {
+            const model3D = viewerRef.entities.getById(model3DId);
+            if (model3D && model3D.show) {
+                // Use `pos` (raw position from SampledPositionProperty) for orientation calc
+                model3D.orientation = Cesium.Transforms.headingPitchRollQuaternion(pos, modelHpr);
+            }
         }
     }
 

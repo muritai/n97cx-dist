@@ -207,8 +207,16 @@ import { loadHPBData, getOrientation, isHPBLoaded } from './hpbOrientationData.j
 // Cessna 172 Model License (CC-BY-4.0):
 // This work is based on "Cessna172" (https://sketchfab.com/3d-models/cessna172-d1b15841c29c43d0862667300bad55a4)
 // by KOG_THORNS (https://sketchfab.com/ioai25312) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+// Time when N97CX extends gear for landing (model swap point)
+const N97CX_GEAR_EXTEND_TIME = Cesium.JulianDate.fromIso8601('2022-07-17T19:02:10Z');
+
 const MODEL_CONFIG = {
     N97CX: {
+        // Gear UP model (used until 19:02:10 - gear retracted during flight)
+        modelUriGearUp: 'js/models/PropJet/PropJetNoPropNoGear_Alan.glb',
+        // Gear DOWN model (used after 19:02:10 - gear extended for landing)
+        modelUriGearDown: 'js/models/PropJet/PropJet_NoProp.glb',
+        // Legacy field for compatibility
         modelUri: 'js/models/PropJet/PropJetNoPropNoGear_Alan.glb',
         scale: 0.809,  // Scaled to PA-46 Meridian wingspan (43 ft / 13.11m)
         label: 'N97CX 3D',
@@ -218,7 +226,10 @@ const MODEL_CONFIG = {
         pitchMultiplier: 1,
         rollMultiplier: -1,   // Invert roll
         swapPitchRoll: false,
-        silhouetteColor: Cesium.Color.YELLOW  // Outline color
+        silhouetteColor: Cesium.Color.YELLOW,  // Outline color
+        // Time-based model swap
+        hasGearSwap: true,
+        gearSwapTime: '2022-07-17T19:02:10Z'
     },
     N160RA: {
         modelUri: 'js/models/cessna172/Cessna_NoProp.glb',
@@ -281,6 +292,7 @@ async function loadPositionFromCSV(aircraftId) {
 
 /**
  * Create a 3D model entity that follows XYZ position with HPB orientation
+ * For N97CX, creates two entities with gear swap at 19:02:10
  */
 async function create3DModelEntity(aircraftId) {
     const config = MODEL_CONFIG[aircraftId];
@@ -334,7 +346,67 @@ async function create3DModelEntity(aircraftId) {
         ]);
     }
 
-    // Create entity with model (no label for clean comparison)
+    // Handle N97CX gear swap - create two entities with different models
+    if (aircraftId === 'N97CX' && config.hasGearSwap) {
+        const gearSwapTime = Cesium.JulianDate.fromIso8601(config.gearSwapTime);
+        const simStart = Cesium.JulianDate.fromIso8601('2022-07-17T18:45:00Z');
+        const simEnd = Cesium.JulianDate.fromIso8601('2022-07-17T19:10:00Z');
+
+        // Gear UP entity (before 19:02:10 - gear retracted during flight)
+        const gearUpAvailability = new Cesium.TimeIntervalCollection([
+            new Cesium.TimeInterval({
+                start: simStart,
+                stop: gearSwapTime
+            })
+        ]);
+
+        const entityGearUp = viewer.entities.add({
+            id: `${aircraftId}-3d-model-gearup`,
+            name: `${aircraftId} 3D Model (Gear Up)`,
+            position: positionProperty,
+            availability: gearUpAvailability,
+            show: false,  // Hidden by default
+            model: {
+                uri: config.modelUriGearUp,
+                scale: config.scale,
+                minimumPixelSize: 0,
+                maximumScale: 20000,
+                silhouetteColor: config.silhouetteColor || Cesium.Color.WHITE,
+                silhouetteSize: 0
+            }
+        });
+
+        // Gear DOWN entity (after 19:02:10 - gear extended for landing)
+        const gearDownAvailability = new Cesium.TimeIntervalCollection([
+            new Cesium.TimeInterval({
+                start: gearSwapTime,
+                stop: simEnd
+            })
+        ]);
+
+        const entityGearDown = viewer.entities.add({
+            id: `${aircraftId}-3d-model-geardown`,
+            name: `${aircraftId} 3D Model (Gear Down)`,
+            position: positionProperty,
+            availability: gearDownAvailability,
+            show: false,  // Hidden by default
+            model: {
+                uri: config.modelUriGearDown,
+                scale: config.scale,
+                minimumPixelSize: 0,
+                maximumScale: 20000,
+                silhouetteColor: config.silhouetteColor || Cesium.Color.WHITE,
+                silhouetteSize: 0
+            }
+        });
+
+        // Store both entities as an array for this aircraft
+        model3DEntities[aircraftId] = [entityGearUp, entityGearDown];
+        console.log(`✅ Created dual 3D model entities for ${aircraftId} (gear swap at 19:02:10)`);
+        return entityGearUp;  // Return first entity for compatibility
+    }
+
+    // Standard single-model entity for other aircraft
     const entity = viewer.entities.add({
         id: `${aircraftId}-3d-model`,
         name: `${aircraftId} 3D Model`,
@@ -423,13 +495,12 @@ async function create3DModelEntity(aircraftId) {
 
 /**
  * Update 3D model orientations based on current playback time
+ * Handles both single entities and dual-entity gear swap (N97CX)
  */
 function update3DModelOrientations(clock) {
     const currentTime = clock.currentTime;
 
-    for (const [aircraftId, entity] of Object.entries(model3DEntities)) {
-        if (!entity.show) continue;
-
+    for (const [aircraftId, entityOrArray] of Object.entries(model3DEntities)) {
         // Skip N97CX when follow is enabled - followView.js handles it directly
         // to ensure perfect sync between camera and model
         if (aircraftId === 'N97CX' && isFollowEnabled()) {
@@ -441,10 +512,6 @@ function update3DModelOrientations(clock) {
 
         const orientation = getOrientation(aircraftId, currentTime);
         if (!orientation) continue;
-
-        // Get current position for orientation calculation
-        const position = entity.position?.getValue ? entity.position.getValue(currentTime) : null;
-        if (!position) continue;
 
         // Apply model-specific corrections
         const adjustedHeading = orientation.heading + (config.headingOffset || 0);
@@ -460,14 +527,25 @@ function update3DModelOrientations(clock) {
         const adjustedPitch = pitchValue * (config.pitchMultiplier || 1);
         const adjustedRoll = rollValue * (config.rollMultiplier || 1);
 
-        // Convert HPB to Cesium orientation
-        const hpr = new Cesium.HeadingPitchRoll(
-            Cesium.Math.toRadians(adjustedHeading),
-            Cesium.Math.toRadians(adjustedPitch),
-            Cesium.Math.toRadians(adjustedRoll)
-        );
+        // Get entities to update (handle both single and array)
+        const entities = Array.isArray(entityOrArray) ? entityOrArray : [entityOrArray];
 
-        entity.orientation = Cesium.Transforms.headingPitchRollQuaternion(position, hpr);
+        for (const entity of entities) {
+            if (!entity.show) continue;
+
+            // Get current position for orientation calculation
+            const position = entity.position?.getValue ? entity.position.getValue(currentTime) : null;
+            if (!position) continue;
+
+            // Convert HPB to Cesium orientation
+            const hpr = new Cesium.HeadingPitchRoll(
+                Cesium.Math.toRadians(adjustedHeading),
+                Cesium.Math.toRadians(adjustedPitch),
+                Cesium.Math.toRadians(adjustedRoll)
+            );
+
+            entity.orientation = Cesium.Transforms.headingPitchRollQuaternion(position, hpr);
+        }
     }
 }
 
@@ -494,9 +572,10 @@ function stop3DModelUpdates() {
 
 /**
  * Toggle 3D model visibility for an aircraft
+ * Handles both single entities and dual-entity gear swap (N97CX)
  */
 export async function set3DModelVisible(aircraftId, visible) {
-    let entity = model3DEntities[aircraftId];
+    let entities = model3DEntities[aircraftId];
 
     if (visible) {
         // Load HPB data if not already loaded
@@ -506,24 +585,39 @@ export async function set3DModelVisible(aircraftId, visible) {
         }
 
         // Create entity if not exists
-        if (!entity) {
-            entity = await create3DModelEntity(aircraftId);
-            if (!entity) return;
+        if (!entities) {
+            await create3DModelEntity(aircraftId);
+            entities = model3DEntities[aircraftId];
+            if (!entities) return;
         }
 
-        entity.show = true;
+        // Handle both single entity and array of entities (gear swap)
+        if (Array.isArray(entities)) {
+            entities.forEach(e => e.show = true);
+        } else {
+            entities.show = true;
+        }
 
         // Start tick handler if any model is visible
         start3DModelUpdates();
 
         // console.log(`🛩️ ${aircraftId} 3D model shown`);
     } else {
-        if (entity) {
-            entity.show = false;
+        if (entities) {
+            if (Array.isArray(entities)) {
+                entities.forEach(e => e.show = false);
+            } else {
+                entities.show = false;
+            }
         }
 
         // Stop tick handler if no models are visible
-        const anyVisible = Object.values(model3DEntities).some(e => e && e.show);
+        const anyVisible = Object.values(model3DEntities).some(e => {
+            if (Array.isArray(e)) {
+                return e.some(ent => ent && ent.show);
+            }
+            return e && e.show;
+        });
         if (!anyVisible) {
             stop3DModelUpdates();
         }
@@ -534,10 +628,16 @@ export async function set3DModelVisible(aircraftId, visible) {
 
 /**
  * Check if a 3D model is currently visible
+ * Handles both single entities and dual-entity gear swap (N97CX)
  */
 export function is3DModelVisible(aircraftId) {
-    const entity = model3DEntities[aircraftId];
-    return entity && entity.show;
+    const entityOrArray = model3DEntities[aircraftId];
+    if (!entityOrArray) return false;
+
+    if (Array.isArray(entityOrArray)) {
+        return entityOrArray.some(e => e && e.show);
+    }
+    return entityOrArray.show;
 }
 
 /**
@@ -549,17 +649,28 @@ export function get3DModelPosition(aircraftId) {
 
 /**
  * Toggle outline (silhouette) for a 3D model
+ * Handles both single entities and dual-entity gear swap (N97CX)
  * @returns {boolean} New outline state (true = on)
  */
 export function toggle3DModelOutline(aircraftId) {
-    const entity = model3DEntities[aircraftId];
-    if (!entity || !entity.model) return false;
+    const entityOrArray = model3DEntities[aircraftId];
+    if (!entityOrArray) return false;
 
-    const currentSize = entity.model.silhouetteSize?.getValue ?
-        entity.model.silhouetteSize.getValue() :
-        entity.model.silhouetteSize;
+    const entities = Array.isArray(entityOrArray) ? entityOrArray : [entityOrArray];
+    const firstEntity = entities[0];
+    if (!firstEntity || !firstEntity.model) return false;
+
+    const currentSize = firstEntity.model.silhouetteSize?.getValue ?
+        firstEntity.model.silhouetteSize.getValue() :
+        firstEntity.model.silhouetteSize;
     const newSize = currentSize > 0 ? 0 : 2;
-    entity.model.silhouetteSize = newSize;
+
+    // Apply to all entities
+    for (const entity of entities) {
+        if (entity && entity.model) {
+            entity.model.silhouetteSize = newSize;
+        }
+    }
 
     // console.log(`${aircraftId} outline: ${newSize > 0 ? 'ON' : 'OFF'}`);
     return newSize > 0;
@@ -567,39 +678,50 @@ export function toggle3DModelOutline(aircraftId) {
 
 /**
  * Set outline state for a 3D model
+ * Handles both single entities and dual-entity gear swap (N97CX)
  */
 export function set3DModelOutline(aircraftId, enabled) {
-    const entity = model3DEntities[aircraftId];
-    if (!entity || !entity.model) return;
+    const entityOrArray = model3DEntities[aircraftId];
+    if (!entityOrArray) return;
 
     const config = MODEL_CONFIG[aircraftId];
     const highlightColor = config?.silhouetteColor || Cesium.Color.YELLOW;
 
-    // Silhouette not supported in this environment, use color highlight instead
-    if (enabled) {
-        // Bright highlight effect - makes model "glow" with the highlight color
-        entity.model.color = highlightColor;
-        entity.model.colorBlendMode = Cesium.ColorBlendMode.MIX;
-        entity.model.colorBlendAmount = 0.5;
-    } else {
-        // Reset to normal appearance
-        entity.model.color = Cesium.Color.WHITE;
-        entity.model.colorBlendMode = Cesium.ColorBlendMode.HIGHLIGHT;
-        entity.model.colorBlendAmount = 0.0;
+    const entities = Array.isArray(entityOrArray) ? entityOrArray : [entityOrArray];
+
+    for (const entity of entities) {
+        if (!entity || !entity.model) continue;
+
+        // Silhouette not supported in this environment, use color highlight instead
+        if (enabled) {
+            // Bright highlight effect - makes model "glow" with the highlight color
+            entity.model.color = highlightColor;
+            entity.model.colorBlendMode = Cesium.ColorBlendMode.MIX;
+            entity.model.colorBlendAmount = 0.5;
+        } else {
+            // Reset to normal appearance
+            entity.model.color = Cesium.Color.WHITE;
+            entity.model.colorBlendMode = Cesium.ColorBlendMode.HIGHLIGHT;
+            entity.model.colorBlendAmount = 0.0;
+        }
     }
 }
 
 /**
  * Set minimumPixelSize for all 3D models (viewable at distance toggle)
+ * Handles both single entities and dual-entity gear swap (N97CX)
  * @param {boolean} viewable - true = always visible (48px min), false = scale with distance
  */
 export function setAllModelsViewableAtDistance(viewable) {
     const pixelSize = viewable ? 48 : 0;
 
     // Update main aircraft models
-    for (const [aircraftId, entity] of Object.entries(model3DEntities)) {
-        if (entity && entity.model) {
-            entity.model.minimumPixelSize = pixelSize;
+    for (const [aircraftId, entityOrArray] of Object.entries(model3DEntities)) {
+        const entities = Array.isArray(entityOrArray) ? entityOrArray : [entityOrArray];
+        for (const entity of entities) {
+            if (entity && entity.model) {
+                entity.model.minimumPixelSize = pixelSize;
+            }
         }
     }
 
